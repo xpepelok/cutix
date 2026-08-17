@@ -1,0 +1,19 @@
+[package]
+name = "video"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+dsp = { version = "0.1.0", path = "../dsp" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mp4 = "0.14"
+openh264 = "0.8"
+libloading = "0.8"
+
+[dev-dependencies]
+fixtures = { version = "0.1.0", path = "../fixtures" }

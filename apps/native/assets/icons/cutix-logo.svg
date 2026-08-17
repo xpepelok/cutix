@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+	<defs>
+		<clipPath id="cutix-above">
+			<path d="M0 0 H256 V104 L0 150 Z"/>
+		</clipPath>
+		<clipPath id="cutix-below">
+			<path d="M0 168 L256 122 V256 H0 Z"/>
+		</clipPath>
+		<path id="cutix-play" d="M88 54 L88 202 A14 14 0 0 0 106 213 L204 139 A14 14 0 0 0 204 117 L106 43 A14 14 0 0 0 88 54 Z"/>
+	</defs>
+	<g clip-path="url(#cutix-above)">
+		<use href="#cutix-play" fill="currentColor" transform="translate(-7 -3)"/>
+	</g>
+	<g clip-path="url(#cutix-below)">
+		<use href="#cutix-play" fill="currentColor" transform="translate(7 3)"/>
+	</g>
+</svg>

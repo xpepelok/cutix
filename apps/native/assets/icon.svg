@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+	<defs>
+		<clipPath id="above">
+			<path d="M0 0 H256 V104 L0 150 Z"/>
+		</clipPath>
+		<clipPath id="below">
+			<path d="M0 168 L256 122 V256 H0 Z"/>
+		</clipPath>
+		<path id="play" d="M88 54 L88 202 A14 14 0 0 0 106 213 L204 139 A14 14 0 0 0 204 117 L106 43 A14 14 0 0 0 84 54 Z"/>
+	</defs>
+	<rect width="256" height="256" rx="56" fill="#000000"/>
+	<g clip-path="url(#above)">
+		<use href="#play" fill="#ffffff" transform="translate(-7 -3)"/>
+	</g>
+	<g clip-path="url(#below)">
+		<use href="#play" fill="#ffffff" transform="translate(7 3)"/>
+	</g>
+</svg>

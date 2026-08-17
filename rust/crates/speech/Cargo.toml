@@ -1,0 +1,20 @@
+[package]
+name = "speech"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+thiserror = "2.0"
+ureq = "2.10"
+misaki-rs = { version = "0.3", default-features = false }
+serde_json = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
+
+[target.'cfg(not(windows))'.dependencies]
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"] }

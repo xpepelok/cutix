@@ -1,0 +1,36 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Machine-readable documentation and dependency graphs — they live in
+# https://github.com/xpepelok/cutix-docs, not here
+/docs/ai
+/.ua
+
+# Local scratch
+/__pycache__
+*.pyc
+/ra.json
+/deep_query.py
+
+# Bundled runtimes and models fetched at first run
+/ffmpeg
+/models
+
+# Editors and systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Nix
+result
+result-*
+.direnv/
+
+# Build caches left over from the tooling this project no longer uses
+/.turbo
+/.moon
+
+# Test media, generated on demand by the fixtures crate
+/.fixtures

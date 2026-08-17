@@ -1,0 +1,2155 @@
+[
+ {
+  "code": "AD",
+  "name": "Andorra",
+  "region": "Western Europe",
+  "languages": [
+   "catalan"
+  ]
+ },
+ {
+  "code": "AE",
+  "name": "United Arab Emirates",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "AF",
+  "name": "Afghanistan",
+  "region": "South Asia",
+  "languages": [
+   "dari",
+   "pashto"
+  ]
+ },
+ {
+  "code": "AG",
+  "name": "Antigua and Barbuda",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "AI",
+  "name": "Anguilla",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "AL",
+  "name": "Albania",
+  "region": "Southern Europe",
+  "languages": [
+   "albanian"
+  ]
+ },
+ {
+  "code": "AM",
+  "name": "Armenia",
+  "region": "Middle East",
+  "languages": [
+   "armenian"
+  ]
+ },
+ {
+  "code": "AO",
+  "name": "Angola",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "AQ",
+  "name": "Antarctica",
+  "region": "Antarctica",
+  "languages": []
+ },
+ {
+  "code": "AR",
+  "name": "Argentina",
+  "region": "South America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "AS",
+  "name": "American Samoa",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "samoan"
+  ]
+ },
+ {
+  "code": "AT",
+  "name": "Austria",
+  "region": "Western Europe",
+  "languages": [
+   "german"
+  ]
+ },
+ {
+  "code": "AU",
+  "name": "Australia",
+  "region": "Oceania",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "AW",
+  "name": "Aruba",
+  "region": "Caribbean",
+  "languages": [
+   "dutch",
+   "papiamento"
+  ]
+ },
+ {
+  "code": "AX",
+  "name": "Aland Islands",
+  "region": "Northern Europe",
+  "languages": [
+   "swedish"
+  ]
+ },
+ {
+  "code": "AZ",
+  "name": "Azerbaijan",
+  "region": "Middle East",
+  "languages": [
+   "azerbaijani"
+  ]
+ },
+ {
+  "code": "BA",
+  "name": "Bosnia and Herzegovina",
+  "region": "Southern Europe",
+  "languages": [
+   "bosnian",
+   "croatian",
+   "serbian"
+  ]
+ },
+ {
+  "code": "BB",
+  "name": "Barbados",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "BD",
+  "name": "Bangladesh",
+  "region": "South Asia",
+  "languages": [
+   "bengali"
+  ]
+ },
+ {
+  "code": "BE",
+  "name": "Belgium",
+  "region": "Western Europe",
+  "languages": [
+   "french",
+   "dutch",
+   "german"
+  ]
+ },
+ {
+  "code": "BF",
+  "name": "Burkina Faso",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "BG",
+  "name": "Bulgaria",
+  "region": "Eastern Europe",
+  "languages": [
+   "bulgarian"
+  ]
+ },
+ {
+  "code": "BH",
+  "name": "Bahrain",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "BI",
+  "name": "Burundi",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "kirundi",
+   "french",
+   "english"
+  ]
+ },
+ {
+  "code": "BJ",
+  "name": "Benin",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "BL",
+  "name": "Saint Barthelemy",
+  "region": "Caribbean",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "BM",
+  "name": "Bermuda",
+  "region": "North Atlantic",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "BN",
+  "name": "Brunei",
+  "region": "Southeast Asia",
+  "languages": [
+   "malay"
+  ]
+ },
+ {
+  "code": "BO",
+  "name": "Bolivia",
+  "region": "South America",
+  "languages": [
+   "spanish",
+   "quechua",
+   "aymara"
+  ]
+ },
+ {
+  "code": "BQ",
+  "name": "Caribbean Netherlands",
+  "region": "Caribbean",
+  "languages": [
+   "dutch",
+   "papiamento",
+   "english"
+  ]
+ },
+ {
+  "code": "BR",
+  "name": "Brazil",
+  "region": "South America",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "BS",
+  "name": "Bahamas",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "BT",
+  "name": "Bhutan",
+  "region": "South Asia",
+  "languages": [
+   "dzongkha"
+  ]
+ },
+ {
+  "code": "BV",
+  "name": "Bouvet Island",
+  "region": "Antarctica",
+  "languages": []
+ },
+ {
+  "code": "BW",
+  "name": "Botswana",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "tswana"
+  ]
+ },
+ {
+  "code": "BY",
+  "name": "Belarus",
+  "region": "Eastern Europe",
+  "languages": [
+   "belarusian",
+   "russian"
+  ]
+ },
+ {
+  "code": "BZ",
+  "name": "Belize",
+  "region": "Central America",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "CA",
+  "name": "Canada",
+  "region": "North America",
+  "languages": [
+   "english",
+   "french"
+  ]
+ },
+ {
+  "code": "CC",
+  "name": "Cocos (Keeling) Islands",
+  "region": "Southeast Asia",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "CD",
+  "name": "Democratic Republic of the Congo",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french",
+   "lingala",
+   "swahili",
+   "tshiluba",
+   "kikongo"
+  ]
+ },
+ {
+  "code": "CF",
+  "name": "Central African Republic",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french",
+   "sango"
+  ]
+ },
+ {
+  "code": "CG",
+  "name": "Republic of the Congo",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french",
+   "lingala",
+   "kituba"
+  ]
+ },
+ {
+  "code": "CH",
+  "name": "Switzerland",
+  "region": "Western Europe",
+  "languages": [
+   "german",
+   "french",
+   "italian"
+  ]
+ },
+ {
+  "code": "CI",
+  "name": "Cote d'Ivoire",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "CK",
+  "name": "Cook Islands",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "cook islands maori"
+  ]
+ },
+ {
+  "code": "CL",
+  "name": "Chile",
+  "region": "South America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "CM",
+  "name": "Cameroon",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "french"
+  ]
+ },
+ {
+  "code": "CN",
+  "name": "China",
+  "region": "East Asia",
+  "languages": [
+   "mandarin"
+  ]
+ },
+ {
+  "code": "CO",
+  "name": "Colombia",
+  "region": "South America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "CR",
+  "name": "Costa Rica",
+  "region": "Central America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "CU",
+  "name": "Cuba",
+  "region": "Caribbean",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "CV",
+  "name": "Cape Verde",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "CW",
+  "name": "Curacao",
+  "region": "Caribbean",
+  "languages": [
+   "dutch",
+   "papiamento",
+   "english"
+  ]
+ },
+ {
+  "code": "CX",
+  "name": "Christmas Island",
+  "region": "Oceania",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "CY",
+  "name": "Cyprus",
+  "region": "Middle East",
+  "languages": [
+   "greek",
+   "turkish"
+  ]
+ },
+ {
+  "code": "CZ",
+  "name": "Czechia",
+  "region": "Eastern Europe",
+  "languages": [
+   "czech"
+  ]
+ },
+ {
+  "code": "DE",
+  "name": "Germany",
+  "region": "Western Europe",
+  "languages": [
+   "german"
+  ]
+ },
+ {
+  "code": "DJ",
+  "name": "Djibouti",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "arabic",
+   "french",
+   "afar",
+   "somali"
+  ]
+ },
+ {
+  "code": "DK",
+  "name": "Denmark",
+  "region": "Northern Europe",
+  "languages": [
+   "danish"
+  ]
+ },
+ {
+  "code": "DM",
+  "name": "Dominica",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "DO",
+  "name": "Dominican Republic",
+  "region": "Caribbean",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "DZ",
+  "name": "Algeria",
+  "region": "North Africa",
+  "languages": [
+   "arabic",
+   "tamazight"
+  ]
+ },
+ {
+  "code": "EC",
+  "name": "Ecuador",
+  "region": "South America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "EE",
+  "name": "Estonia",
+  "region": "Northern Europe",
+  "languages": [
+   "estonian"
+  ]
+ },
+ {
+  "code": "EG",
+  "name": "Egypt",
+  "region": "North Africa",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "EH",
+  "name": "Western Sahara",
+  "region": "North Africa",
+  "languages": [
+   "arabic",
+   "spanish"
+  ]
+ },
+ {
+  "code": "ER",
+  "name": "Eritrea",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "tigrinya",
+   "arabic",
+   "english"
+  ]
+ },
+ {
+  "code": "ES",
+  "name": "Spain",
+  "region": "Southern Europe",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "ET",
+  "name": "Ethiopia",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "amharic",
+   "oromo"
+  ]
+ },
+ {
+  "code": "EU",
+  "name": "European Union",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "french",
+   "german"
+  ]
+ },
+ {
+  "code": "FI",
+  "name": "Finland",
+  "region": "Northern Europe",
+  "languages": [
+   "finnish",
+   "swedish"
+  ]
+ },
+ {
+  "code": "FJ",
+  "name": "Fiji",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "fijian",
+   "hindi"
+  ]
+ },
+ {
+  "code": "FK",
+  "name": "Falkland Islands",
+  "region": "South America",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "FM",
+  "name": "Micronesia",
+  "region": "Oceania",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "FO",
+  "name": "Faroe Islands",
+  "region": "Northern Europe",
+  "languages": [
+   "faroese",
+   "danish"
+  ]
+ },
+ {
+  "code": "FR",
+  "name": "France",
+  "region": "Western Europe",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "GA",
+  "name": "Gabon",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "GB-ENG",
+  "name": "England",
+  "region": "Western Europe",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "GB-NIR",
+  "name": "Northern Ireland",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "irish"
+  ]
+ },
+ {
+  "code": "GB-SCT",
+  "name": "Scotland",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "scottish gaelic"
+  ]
+ },
+ {
+  "code": "GB-WLS",
+  "name": "Wales",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "welsh"
+  ]
+ },
+ {
+  "code": "GB",
+  "name": "United Kingdom",
+  "region": "Western Europe",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "GD",
+  "name": "Grenada",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "GE",
+  "name": "Georgia",
+  "region": "Middle East",
+  "languages": [
+   "georgian"
+  ]
+ },
+ {
+  "code": "GF",
+  "name": "French Guiana",
+  "region": "South America",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "GG",
+  "name": "Guernsey",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "french"
+  ]
+ },
+ {
+  "code": "GH",
+  "name": "Ghana",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "GI",
+  "name": "Gibraltar",
+  "region": "Southern Europe",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "GL",
+  "name": "Greenland",
+  "region": "North America",
+  "languages": [
+   "kalaallisut",
+   "danish"
+  ]
+ },
+ {
+  "code": "GM",
+  "name": "Gambia",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "GN",
+  "name": "Guinea",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "GP",
+  "name": "Guadeloupe",
+  "region": "Caribbean",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "GQ",
+  "name": "Equatorial Guinea",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "spanish",
+   "french",
+   "portuguese"
+  ]
+ },
+ {
+  "code": "GR",
+  "name": "Greece",
+  "region": "Southern Europe",
+  "languages": [
+   "greek"
+  ]
+ },
+ {
+  "code": "GS",
+  "name": "South Georgia and the South Sandwich Islands",
+  "region": "Atlantic Ocean",
+  "languages": []
+ },
+ {
+  "code": "GT",
+  "name": "Guatemala",
+  "region": "Central America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "GU",
+  "name": "Guam",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "chamorro"
+  ]
+ },
+ {
+  "code": "GW",
+  "name": "Guinea-Bissau",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "GY",
+  "name": "Guyana",
+  "region": "South America",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "HK",
+  "name": "Hong Kong",
+  "region": "East Asia",
+  "languages": [
+   "cantonese",
+   "english"
+  ]
+ },
+ {
+  "code": "HM",
+  "name": "Heard Island and McDonald Islands",
+  "region": "Oceania",
+  "languages": []
+ },
+ {
+  "code": "HN",
+  "name": "Honduras",
+  "region": "Central America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "HR",
+  "name": "Croatia",
+  "region": "Southern Europe",
+  "languages": [
+   "croatian"
+  ]
+ },
+ {
+  "code": "HT",
+  "name": "Haiti",
+  "region": "Caribbean",
+  "languages": [
+   "haitian creole",
+   "french"
+  ]
+ },
+ {
+  "code": "HU",
+  "name": "Hungary",
+  "region": "Eastern Europe",
+  "languages": [
+   "hungarian"
+  ]
+ },
+ {
+  "code": "ID",
+  "name": "Indonesia",
+  "region": "Southeast Asia",
+  "languages": [
+   "indonesian"
+  ]
+ },
+ {
+  "code": "IE",
+  "name": "Ireland",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "irish"
+  ]
+ },
+ {
+  "code": "IL",
+  "name": "Israel",
+  "region": "Middle East",
+  "languages": [
+   "hebrew",
+   "arabic"
+  ]
+ },
+ {
+  "code": "IM",
+  "name": "Isle of Man",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "manx"
+  ]
+ },
+ {
+  "code": "IN",
+  "name": "India",
+  "region": "South Asia",
+  "languages": [
+   "hindi",
+   "english"
+  ]
+ },
+ {
+  "code": "IO",
+  "name": "British Indian Ocean Territory",
+  "region": "South Asia",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "IQ",
+  "name": "Iraq",
+  "region": "Middle East",
+  "languages": [
+   "arabic",
+   "kurdish"
+  ]
+ },
+ {
+  "code": "IR",
+  "name": "Iran",
+  "region": "Middle East",
+  "languages": [
+   "persian"
+  ]
+ },
+ {
+  "code": "IS",
+  "name": "Iceland",
+  "region": "Northern Europe",
+  "languages": [
+   "icelandic"
+  ]
+ },
+ {
+  "code": "IT",
+  "name": "Italy",
+  "region": "Southern Europe",
+  "languages": [
+   "italian"
+  ]
+ },
+ {
+  "code": "JE",
+  "name": "Jersey",
+  "region": "Western Europe",
+  "languages": [
+   "english",
+   "french"
+  ]
+ },
+ {
+  "code": "JM",
+  "name": "Jamaica",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "JO",
+  "name": "Jordan",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "JP",
+  "name": "Japan",
+  "region": "East Asia",
+  "languages": [
+   "japanese"
+  ]
+ },
+ {
+  "code": "KE",
+  "name": "Kenya",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "swahili"
+  ]
+ },
+ {
+  "code": "KG",
+  "name": "Kyrgyzstan",
+  "region": "Central Asia",
+  "languages": [
+   "kyrgyz",
+   "russian"
+  ]
+ },
+ {
+  "code": "KH",
+  "name": "Cambodia",
+  "region": "Southeast Asia",
+  "languages": [
+   "khmer"
+  ]
+ },
+ {
+  "code": "KI",
+  "name": "Kiribati",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "kiribati"
+  ]
+ },
+ {
+  "code": "KM",
+  "name": "Comoros",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "comorian",
+   "arabic",
+   "french"
+  ]
+ },
+ {
+  "code": "KN",
+  "name": "Saint Kitts and Nevis",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "KP",
+  "name": "North Korea",
+  "region": "East Asia",
+  "languages": [
+   "korean"
+  ]
+ },
+ {
+  "code": "KR",
+  "name": "South Korea",
+  "region": "East Asia",
+  "languages": [
+   "korean"
+  ]
+ },
+ {
+  "code": "KW",
+  "name": "Kuwait",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "KY",
+  "name": "Cayman Islands",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "KZ",
+  "name": "Kazakhstan",
+  "region": "Central Asia",
+  "languages": [
+   "kazakh",
+   "russian"
+  ]
+ },
+ {
+  "code": "LA",
+  "name": "Laos",
+  "region": "Southeast Asia",
+  "languages": [
+   "lao"
+  ]
+ },
+ {
+  "code": "LB",
+  "name": "Lebanon",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "LC",
+  "name": "Saint Lucia",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "LI",
+  "name": "Liechtenstein",
+  "region": "Western Europe",
+  "languages": [
+   "german"
+  ]
+ },
+ {
+  "code": "LK",
+  "name": "Sri Lanka",
+  "region": "South Asia",
+  "languages": [
+   "sinhala",
+   "tamil"
+  ]
+ },
+ {
+  "code": "LR",
+  "name": "Liberia",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "LS",
+  "name": "Lesotho",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "sesotho",
+   "english"
+  ]
+ },
+ {
+  "code": "LT",
+  "name": "Lithuania",
+  "region": "Northern Europe",
+  "languages": [
+   "lithuanian"
+  ]
+ },
+ {
+  "code": "LU",
+  "name": "Luxembourg",
+  "region": "Western Europe",
+  "languages": [
+   "luxembourgish",
+   "french",
+   "german"
+  ]
+ },
+ {
+  "code": "LV",
+  "name": "Latvia",
+  "region": "Northern Europe",
+  "languages": [
+   "latvian"
+  ]
+ },
+ {
+  "code": "LY",
+  "name": "Libya",
+  "region": "North Africa",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "MA",
+  "name": "Morocco",
+  "region": "North Africa",
+  "languages": [
+   "arabic",
+   "tamazight"
+  ]
+ },
+ {
+  "code": "MC",
+  "name": "Monaco",
+  "region": "Western Europe",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "MD",
+  "name": "Moldova",
+  "region": "Eastern Europe",
+  "languages": [
+   "romanian"
+  ]
+ },
+ {
+  "code": "ME",
+  "name": "Montenegro",
+  "region": "Southern Europe",
+  "languages": [
+   "montenegrin"
+  ]
+ },
+ {
+  "code": "MF",
+  "name": "Saint Martin",
+  "region": "Caribbean",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "MG",
+  "name": "Madagascar",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "malagasy",
+   "french"
+  ]
+ },
+ {
+  "code": "MH",
+  "name": "Marshall Islands",
+  "region": "Oceania",
+  "languages": [
+   "marshallese",
+   "english"
+  ]
+ },
+ {
+  "code": "MK",
+  "name": "North Macedonia",
+  "region": "Southern Europe",
+  "languages": [
+   "macedonian",
+   "albanian"
+  ]
+ },
+ {
+  "code": "ML",
+  "name": "Mali",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "MM",
+  "name": "Myanmar",
+  "region": "Southeast Asia",
+  "languages": [
+   "burmese"
+  ]
+ },
+ {
+  "code": "MN",
+  "name": "Mongolia",
+  "region": "East Asia",
+  "languages": [
+   "mongolian"
+  ]
+ },
+ {
+  "code": "MO",
+  "name": "Macao",
+  "region": "East Asia",
+  "languages": [
+   "cantonese",
+   "portuguese"
+  ]
+ },
+ {
+  "code": "MP",
+  "name": "Northern Mariana Islands",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "chamorro",
+   "carolinian"
+  ]
+ },
+ {
+  "code": "MQ",
+  "name": "Martinique",
+  "region": "Caribbean",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "MR",
+  "name": "Mauritania",
+  "region": "North Africa",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "MS",
+  "name": "Montserrat",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "MT",
+  "name": "Malta",
+  "region": "Southern Europe",
+  "languages": [
+   "maltese",
+   "english"
+  ]
+ },
+ {
+  "code": "MU",
+  "name": "Mauritius",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "french",
+   "mauritian creole"
+  ]
+ },
+ {
+  "code": "MV",
+  "name": "Maldives",
+  "region": "South Asia",
+  "languages": [
+   "divehi"
+  ]
+ },
+ {
+  "code": "MW",
+  "name": "Malawi",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "chichewa"
+  ]
+ },
+ {
+  "code": "MX",
+  "name": "Mexico",
+  "region": "North America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "MY",
+  "name": "Malaysia",
+  "region": "Southeast Asia",
+  "languages": [
+   "malay"
+  ]
+ },
+ {
+  "code": "MZ",
+  "name": "Mozambique",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "NA",
+  "name": "Namibia",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "NC",
+  "name": "New Caledonia",
+  "region": "Oceania",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "NE",
+  "name": "Niger",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "NF",
+  "name": "Norfolk Island",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "norfuk"
+  ]
+ },
+ {
+  "code": "NG",
+  "name": "Nigeria",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "NI",
+  "name": "Nicaragua",
+  "region": "Central America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "NL",
+  "name": "Netherlands",
+  "region": "Western Europe",
+  "languages": [
+   "dutch"
+  ]
+ },
+ {
+  "code": "NO",
+  "name": "Norway",
+  "region": "Northern Europe",
+  "languages": [
+   "norwegian"
+  ]
+ },
+ {
+  "code": "NP",
+  "name": "Nepal",
+  "region": "South Asia",
+  "languages": [
+   "nepali"
+  ]
+ },
+ {
+  "code": "NR",
+  "name": "Nauru",
+  "region": "Oceania",
+  "languages": [
+   "nauruan",
+   "english"
+  ]
+ },
+ {
+  "code": "NU",
+  "name": "Niue",
+  "region": "Oceania",
+  "languages": [
+   "niuean",
+   "english"
+  ]
+ },
+ {
+  "code": "NZ",
+  "name": "New Zealand",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "maori"
+  ]
+ },
+ {
+  "code": "OM",
+  "name": "Oman",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "PA",
+  "name": "Panama",
+  "region": "Central America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "PE",
+  "name": "Peru",
+  "region": "South America",
+  "languages": [
+   "spanish",
+   "quechua",
+   "aymara"
+  ]
+ },
+ {
+  "code": "PF",
+  "name": "French Polynesia",
+  "region": "Oceania",
+  "languages": [
+   "french",
+   "tahitian"
+  ]
+ },
+ {
+  "code": "PG",
+  "name": "Papua New Guinea",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "tok pisin",
+   "hiri motu"
+  ]
+ },
+ {
+  "code": "PH",
+  "name": "Philippines",
+  "region": "Southeast Asia",
+  "languages": [
+   "filipino",
+   "english"
+  ]
+ },
+ {
+  "code": "PK",
+  "name": "Pakistan",
+  "region": "South Asia",
+  "languages": [
+   "urdu",
+   "english"
+  ]
+ },
+ {
+  "code": "PL",
+  "name": "Poland",
+  "region": "Eastern Europe",
+  "languages": [
+   "polish"
+  ]
+ },
+ {
+  "code": "PM",
+  "name": "Saint Pierre and Miquelon",
+  "region": "North America",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "PN",
+  "name": "Pitcairn Islands",
+  "region": "Oceania",
+  "languages": [
+   "english",
+   "pitkern"
+  ]
+ },
+ {
+  "code": "PR",
+  "name": "Puerto Rico",
+  "region": "Caribbean",
+  "languages": [
+   "spanish",
+   "english"
+  ]
+ },
+ {
+  "code": "PS",
+  "name": "Palestine",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "PT",
+  "name": "Portugal",
+  "region": "Southern Europe",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "PW",
+  "name": "Palau",
+  "region": "Oceania",
+  "languages": [
+   "palauan",
+   "english"
+  ]
+ },
+ {
+  "code": "PY",
+  "name": "Paraguay",
+  "region": "South America",
+  "languages": [
+   "spanish",
+   "guarani"
+  ]
+ },
+ {
+  "code": "QA",
+  "name": "Qatar",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "RE",
+  "name": "Reunion",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french",
+   "reunion creole"
+  ]
+ },
+ {
+  "code": "RO",
+  "name": "Romania",
+  "region": "Eastern Europe",
+  "languages": [
+   "romanian"
+  ]
+ },
+ {
+  "code": "RS",
+  "name": "Serbia",
+  "region": "Eastern Europe",
+  "languages": [
+   "serbian"
+  ]
+ },
+ {
+  "code": "RU",
+  "name": "Russia",
+  "region": "Eastern Europe",
+  "languages": [
+   "russian"
+  ]
+ },
+ {
+  "code": "RW",
+  "name": "Rwanda",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "kinyarwanda",
+   "french",
+   "english"
+  ]
+ },
+ {
+  "code": "SA",
+  "name": "Saudi Arabia",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "SB",
+  "name": "Solomon Islands",
+  "region": "Oceania",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "SC",
+  "name": "Seychelles",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "seychellois creole",
+   "english",
+   "french"
+  ]
+ },
+ {
+  "code": "SD",
+  "name": "Sudan",
+  "region": "North Africa",
+  "languages": [
+   "arabic",
+   "english"
+  ]
+ },
+ {
+  "code": "SE",
+  "name": "Sweden",
+  "region": "Northern Europe",
+  "languages": [
+   "swedish"
+  ]
+ },
+ {
+  "code": "SG",
+  "name": "Singapore",
+  "region": "Southeast Asia",
+  "languages": [
+   "english",
+   "malay",
+   "mandarin",
+   "tamil"
+  ]
+ },
+ {
+  "code": "SH",
+  "name": "Saint Helena",
+  "region": "Atlantic Ocean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "SI",
+  "name": "Slovenia",
+  "region": "Southern Europe",
+  "languages": [
+   "slovenian"
+  ]
+ },
+ {
+  "code": "SJ",
+  "name": "Svalbard and Jan Mayen",
+  "region": "Northern Europe",
+  "languages": [
+   "norwegian"
+  ]
+ },
+ {
+  "code": "SK",
+  "name": "Slovakia",
+  "region": "Eastern Europe",
+  "languages": [
+   "slovak"
+  ]
+ },
+ {
+  "code": "SL",
+  "name": "Sierra Leone",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "SM",
+  "name": "San Marino",
+  "region": "Southern Europe",
+  "languages": [
+   "italian"
+  ]
+ },
+ {
+  "code": "SN",
+  "name": "Senegal",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "SO",
+  "name": "Somalia",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "somali",
+   "arabic"
+  ]
+ },
+ {
+  "code": "SR",
+  "name": "Suriname",
+  "region": "South America",
+  "languages": [
+   "dutch"
+  ]
+ },
+ {
+  "code": "SS",
+  "name": "South Sudan",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "ST",
+  "name": "Sao Tome and Principe",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "portuguese"
+  ]
+ },
+ {
+  "code": "SV",
+  "name": "El Salvador",
+  "region": "Central America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "SX",
+  "name": "Sint Maarten",
+  "region": "Caribbean",
+  "languages": [
+   "dutch",
+   "english"
+  ]
+ },
+ {
+  "code": "SY",
+  "name": "Syria",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "SZ",
+  "name": "Eswatini",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "swazi",
+   "english"
+  ]
+ },
+ {
+  "code": "TC",
+  "name": "Turks and Caicos Islands",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "TD",
+  "name": "Chad",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french",
+   "arabic"
+  ]
+ },
+ {
+  "code": "TF",
+  "name": "French Southern Territories",
+  "region": "Oceania",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "TG",
+  "name": "Togo",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french"
+  ]
+ },
+ {
+  "code": "TH",
+  "name": "Thailand",
+  "region": "Southeast Asia",
+  "languages": [
+   "thai"
+  ]
+ },
+ {
+  "code": "TJ",
+  "name": "Tajikistan",
+  "region": "Central Asia",
+  "languages": [
+   "tajik"
+  ]
+ },
+ {
+  "code": "TK",
+  "name": "Tokelau",
+  "region": "Oceania",
+  "languages": [
+   "tokelauan",
+   "english"
+  ]
+ },
+ {
+  "code": "TL",
+  "name": "Timor-Leste",
+  "region": "Southeast Asia",
+  "languages": [
+   "tetum",
+   "portuguese"
+  ]
+ },
+ {
+  "code": "TM",
+  "name": "Turkmenistan",
+  "region": "Central Asia",
+  "languages": [
+   "turkmen"
+  ]
+ },
+ {
+  "code": "TN",
+  "name": "Tunisia",
+  "region": "North Africa",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "TO",
+  "name": "Tonga",
+  "region": "Oceania",
+  "languages": [
+   "tongan",
+   "english"
+  ]
+ },
+ {
+  "code": "TR",
+  "name": "Turkey",
+  "region": "Middle East",
+  "languages": [
+   "turkish"
+  ]
+ },
+ {
+  "code": "TT",
+  "name": "Trinidad and Tobago",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "TV",
+  "name": "Tuvalu",
+  "region": "Oceania",
+  "languages": [
+   "tuvaluan",
+   "english"
+  ]
+ },
+ {
+  "code": "TW",
+  "name": "Taiwan",
+  "region": "East Asia",
+  "languages": [
+   "mandarin"
+  ]
+ },
+ {
+  "code": "TZ",
+  "name": "Tanzania",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "swahili",
+   "english"
+  ]
+ },
+ {
+  "code": "UA",
+  "name": "Ukraine",
+  "region": "Eastern Europe",
+  "languages": [
+   "ukrainian"
+  ]
+ },
+ {
+  "code": "UG",
+  "name": "Uganda",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "swahili"
+  ]
+ },
+ {
+  "code": "US",
+  "name": "United States",
+  "region": "North America",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "UY",
+  "name": "Uruguay",
+  "region": "South America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "UZ",
+  "name": "Uzbekistan",
+  "region": "Central Asia",
+  "languages": [
+   "uzbek"
+  ]
+ },
+ {
+  "code": "VA",
+  "name": "Vatican City",
+  "region": "Southern Europe",
+  "languages": [
+   "italian",
+   "latin"
+  ]
+ },
+ {
+  "code": "VC",
+  "name": "Saint Vincent and the Grenadines",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "VE",
+  "name": "Venezuela",
+  "region": "South America",
+  "languages": [
+   "spanish"
+  ]
+ },
+ {
+  "code": "VG",
+  "name": "British Virgin Islands",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "VI",
+  "name": "U.S. Virgin Islands",
+  "region": "Caribbean",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "VN",
+  "name": "Vietnam",
+  "region": "Southeast Asia",
+  "languages": [
+   "vietnamese"
+  ]
+ },
+ {
+  "code": "VU",
+  "name": "Vanuatu",
+  "region": "Oceania",
+  "languages": [
+   "bislama",
+   "english",
+   "french"
+  ]
+ },
+ {
+  "code": "WF",
+  "name": "Wallis and Futuna",
+  "region": "Oceania",
+  "languages": [
+   "french",
+   "wallisian",
+   "futunan"
+  ]
+ },
+ {
+  "code": "WS",
+  "name": "Samoa",
+  "region": "Oceania",
+  "languages": [
+   "samoan",
+   "english"
+  ]
+ },
+ {
+  "code": "XK",
+  "name": "Kosovo",
+  "region": "Eastern Europe",
+  "languages": [
+   "albanian",
+   "serbian"
+  ]
+ },
+ {
+  "code": "YE",
+  "name": "Yemen",
+  "region": "Middle East",
+  "languages": [
+   "arabic"
+  ]
+ },
+ {
+  "code": "YT",
+  "name": "Mayotte",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "french",
+   "shimaore",
+   "kibushi"
+  ]
+ },
+ {
+  "code": "ZA",
+  "name": "South Africa",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "zulu",
+   "xhosa",
+   "afrikaans",
+   "english"
+  ]
+ },
+ {
+  "code": "ZM",
+  "name": "Zambia",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english"
+  ]
+ },
+ {
+  "code": "ZW",
+  "name": "Zimbabwe",
+  "region": "Sub-Saharan Africa",
+  "languages": [
+   "english",
+   "shona",
+   "ndebele"
+  ]
+ }
+]

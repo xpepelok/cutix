@@ -1,0 +1,95 @@
+{
+  "base": "en",
+  "locales": [
+    {
+      "code": "en",
+      "name": "English",
+      "keys": 1611,
+      "file": "en.json"
+    },
+    {
+      "code": "ru",
+      "name": "Русский",
+      "keys": 1611,
+      "file": "ru.json"
+    },
+    {
+      "code": "uk",
+      "name": "Українська",
+      "keys": 1611,
+      "file": "uk.json"
+    },
+    {
+      "code": "de",
+      "name": "Deutsch",
+      "keys": 1611,
+      "file": "de.json"
+    },
+    {
+      "code": "pl",
+      "name": "Polski",
+      "keys": 1611,
+      "file": "pl.json"
+    },
+    {
+      "code": "be",
+      "name": "Беларуская",
+      "keys": 1611,
+      "file": "be.json"
+    },
+    {
+      "code": "kk",
+      "name": "Қазақша",
+      "keys": 1611,
+      "file": "kk.json"
+    },
+    {
+      "code": "sv",
+      "name": "Svenska",
+      "keys": 1611,
+      "file": "sv.json"
+    },
+    {
+      "code": "no",
+      "name": "Norsk",
+      "keys": 1611,
+      "file": "no.json"
+    },
+    {
+      "code": "da",
+      "name": "Dansk",
+      "keys": 1611,
+      "file": "da.json"
+    },
+    {
+      "code": "it",
+      "name": "Italiano",
+      "keys": 1611,
+      "file": "it.json"
+    },
+    {
+      "code": "fr",
+      "name": "Français",
+      "keys": 1611,
+      "file": "fr.json"
+    },
+    {
+      "code": "tr",
+      "name": "Türkçe",
+      "keys": 1611,
+      "file": "tr.json"
+    },
+    {
+      "code": "ar",
+      "name": "العربية",
+      "keys": 1611,
+      "file": "ar.json"
+    },
+    {
+      "code": "he",
+      "name": "עברית",
+      "keys": 1611,
+      "file": "he.json"
+    }
+  ]
+}

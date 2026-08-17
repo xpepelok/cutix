@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=cutix
+GenericName=Video Editor
+Comment=cutix video editor
+Exec=cutix %F
+Icon=cutix
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
+StartupWMClass=cutix

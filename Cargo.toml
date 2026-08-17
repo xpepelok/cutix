@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/native",
+    "rust/crates/time",
+    "rust/crates/bridge",
+    "rust/crates/effects",
+    "rust/crates/fixtures",
+    "rust/crates/gpu",
+    "rust/crates/masks",
+    "rust/crates/i18n",
+    "rust/crates/audio",
+    "rust/crates/dsp",
+    "rust/crates/video",
+    "rust/crates/template",
+    "rust/crates/ml",
+    "rust/crates/capcut",
+    "rust/crates/sounds",
+    "rust/crates/speech",
+    "rust/crates/project",
+    "rust/crates/scalebench",
+    "rust/crates/stickers",
+    "rust/crates/playback",
+    "rust/crates/export",
+    "rust/crates/youtube",
+    "rust/crates/compositor",
+    "rust/crates/watermark",
+]
