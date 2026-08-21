@@ -274,7 +274,7 @@ pub fn copy_link(_url: &str) -> bool {
     false
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub const MOVE_WITH_MOUSE: u32 = 0xf010 | 0x0002;
 
 #[cfg(windows)]

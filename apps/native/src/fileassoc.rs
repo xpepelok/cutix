@@ -1,3 +1,4 @@
+#[cfg(any(windows, test))]
 use std::path::Path;
 
 #[cfg(any(windows, test))]
@@ -72,7 +73,7 @@ fn file_verb_key(extension: &str, verb: &str) -> String {
     format!(r"Software\Classes\SystemFileAssociations\.{extension}\shell\{verb}")
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub fn plan_register_file_verbs(executable: &Path, labels: [&str; 2]) -> Vec<Op> {
     let exe = executable.display().to_string();
     let mut ops = Vec::new();
@@ -125,7 +126,7 @@ pub fn register_file_verbs(_labels: [&str; 2]) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub fn plan_register_folder_verb(executable: &Path, label: &str) -> Vec<Op> {
     let exe = executable.display().to_string();
     let mut ops = Vec::new();
@@ -321,7 +322,7 @@ pub fn plan_unregister() -> Vec<Op> {
     ops
 }
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 pub fn executable() -> Option<std::path::PathBuf> {
     std::env::current_exe().ok()
 }
