@@ -123,10 +123,10 @@ pub fn v1_to_v2(mut project: Value, now_iso: &str) -> MigrationResult {
             let Some(scene_object) = scene.as_object_mut() else {
                 return;
             };
-            if let Some(main_id) = &main_scene_id {
-                if scene_object.get("id").and_then(Value::as_str) != Some(main_id.as_str()) {
-                    return;
-                }
+            if let Some(main_id) = &main_scene_id
+                && scene_object.get("id").and_then(Value::as_str) != Some(main_id.as_str())
+            {
+                return;
             }
             let has_bookmarks = scene_object
                 .get("bookmarks")
@@ -160,10 +160,10 @@ pub fn v1_to_v2(mut project: Value, now_iso: &str) -> MigrationResult {
 fn find_main_scene_id(project: &Value) -> Option<String> {
     let scenes = project.get("scenes")?.as_array()?;
     for scene in scenes {
-        if scene.get("isMain") == Some(&Value::Bool(true)) {
-            if let Some(id) = scene.get("id").and_then(Value::as_str) {
-                return Some(id.to_string());
-            }
+        if scene.get("isMain") == Some(&Value::Bool(true))
+            && let Some(id) = scene.get("id").and_then(Value::as_str)
+        {
+            return Some(id.to_string());
         }
     }
     for scene in scenes {

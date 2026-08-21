@@ -63,10 +63,10 @@ fn main() {
     let mut connection = Connection::connect(&browser.websocket_url).expect("connect");
     let page = connection.open("about:blank").expect("tab");
 
-    if let Ok(agent) = connection.user_agent() {
-        if youtube::cdp::is_headless_agent(&agent) {
-            let _ = page.set_user_agent(&mut connection, &youtube::cdp::visible_user_agent(&agent));
-        }
+    if let Ok(agent) = connection.user_agent()
+        && youtube::cdp::is_headless_agent(&agent)
+    {
+        let _ = page.set_user_agent(&mut connection, &youtube::cdp::visible_user_agent(&agent));
     }
 
     page.navigate(&mut connection, "https://www.youtube.com/upload")

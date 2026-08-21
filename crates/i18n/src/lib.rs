@@ -147,10 +147,10 @@ pub fn available_locales() -> Vec<String> {
 }
 
 pub fn locale_name(locale: &str) -> Option<String> {
-    if let Ok(overlay) = overlay().read() {
-        if let Some((_, name)) = overlay.get(locale) {
-            return Some(name.clone());
-        }
+    if let Ok(overlay) = overlay().read()
+        && let Some((_, name)) = overlay.get(locale)
+    {
+        return Some(name.clone());
     }
     raw_values()
         .get(locale)?
@@ -215,13 +215,12 @@ pub fn translate(locale: &str, key: &str) -> String {
 }
 
 fn lookup(locale: &str, key: &str) -> String {
-    if let Ok(overlay) = overlay().read() {
-        if let Some(value) = overlay
+    if let Ok(overlay) = overlay().read()
+        && let Some(value) = overlay
             .get(locale)
             .and_then(|(dictionary, _)| dictionary.get(key))
-        {
-            return value.clone();
-        }
+    {
+        return value.clone();
     }
 
     let all = dictionaries();
@@ -229,13 +228,12 @@ fn lookup(locale: &str, key: &str) -> String {
         return value.clone();
     }
 
-    if let Ok(overlay) = overlay().read() {
-        if let Some(value) = overlay
+    if let Ok(overlay) = overlay().read()
+        && let Some(value) = overlay
             .get(FALLBACK_LOCALE)
             .and_then(|(dictionary, _)| dictionary.get(key))
-        {
-            return value.clone();
-        }
+    {
+        return value.clone();
     }
 
     all.get(FALLBACK_LOCALE)

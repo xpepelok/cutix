@@ -273,13 +273,13 @@ fn load() -> Result<Ffmpeg, Unavailable> {
     }
 
     let directory = configured_directory();
-    if let Some(directory) = directory.as_deref() {
-        if !directory.is_dir() {
-            return Err(Unavailable::NotFound(format!(
-                "{DIR_ENV} is not a directory: {}",
-                directory.display()
-            )));
-        }
+    if let Some(directory) = directory.as_deref()
+        && !directory.is_dir()
+    {
+        return Err(Unavailable::NotFound(format!(
+            "{DIR_ENV} is not a directory: {}",
+            directory.display()
+        )));
     }
 
     let directory = directory.or_else(|| {

@@ -100,10 +100,10 @@ pub fn encoder_kind(name: &str) -> EncoderKind {
 
 pub fn encoder_label(name: &str) -> String {
     #[cfg(not(target_arch = "wasm32"))]
-    if name == crate::ffmpeg_mp4::NAME {
-        if let Some(chosen) = crate::ffmpeg_mp4::chosen_encoder() {
-            return chosen.to_owned();
-        }
+    if name == crate::ffmpeg_mp4::NAME
+        && let Some(chosen) = crate::ffmpeg_mp4::chosen_encoder()
+    {
+        return chosen.to_owned();
     }
     if name == "openh264-mp4" {
         return "openh264".to_owned();

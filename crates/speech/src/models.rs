@@ -297,7 +297,7 @@ pub fn parse_style_matrix(
         ));
     }
     let stride = style_dimensions * 4;
-    if bytes.is_empty() || bytes.len() % stride != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(stride) {
         return Err(SpeechError::InvalidVoiceData(format!(
             "voice file of {} bytes is not a multiple of {stride}",
             bytes.len()

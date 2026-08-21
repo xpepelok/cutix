@@ -116,15 +116,16 @@ pub fn lock_files(profile: &Path) -> Vec<std::path::PathBuf> {
 
 fn release_profile(profile: &Path) -> bool {
     let stale = lock_files(profile);
-    let mut freed = !stale.is_empty();
+    let freed = !stale.is_empty();
     for path in stale {
         let _ = std::fs::remove_file(&path);
     }
 
+    // Shadowed rather than mutated: off Windows there are no processes to stop and
+    // nothing reassigns this, so a `mut` here is a warning on every other platform.
+    // `|` rather than `||`, so the processes are stopped whether or not a lock file was.
     #[cfg(windows)]
-    {
-        freed |= stop_processes_on(profile);
-    }
+    let freed = freed | stop_processes_on(profile);
 
     freed
 }

@@ -29,10 +29,10 @@ impl MigrationResult {
 
 pub fn get_project_id(project: &Value) -> Option<String> {
     let object = project.as_object()?;
-    if let Some(id) = object.get("id").and_then(Value::as_str) {
-        if !id.is_empty() {
-            return Some(id.to_string());
-        }
+    if let Some(id) = object.get("id").and_then(Value::as_str)
+        && !id.is_empty()
+    {
+        return Some(id.to_string());
     }
 
     let metadata = object.get("metadata")?.as_object()?;
@@ -110,10 +110,10 @@ pub fn map_grouped_tracks(project: &mut Value, mut transform: impl FnMut(&mut Va
             return;
         }
 
-        if let Some(main) = tracks.get_mut("main") {
-            if main.is_object() {
-                transform(main);
-            }
+        if let Some(main) = tracks.get_mut("main")
+            && main.is_object()
+        {
+            transform(main);
         }
         for key in ["overlay", "audio"] {
             if let Some(list) = tracks.get_mut(key).and_then(Value::as_array_mut) {

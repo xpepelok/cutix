@@ -41,10 +41,10 @@ pub fn watch_for_sign_in(
 ) -> Result<String, Failure> {
     let deadline = std::time::Instant::now() + SIGN_IN_TIMEOUT;
     loop {
-        if let Ok(targets) = devtools::targets(port) {
-            if let Some(url) = landed_url(&targets) {
-                return Ok(url);
-            }
+        if let Ok(targets) = devtools::targets(port)
+            && let Some(url) = landed_url(&targets)
+        {
+            return Ok(url);
         }
         if !still_open() {
             return Err(Failure::SignInAbandoned);
@@ -185,7 +185,7 @@ pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
 
     let body = text.trim_end_matches('=');
     let padding = text.len() - body.len();
-    if padding > 2 || text.len() % 4 != 0 {
+    if padding > 2 || !text.len().is_multiple_of(4) {
         return None;
     }
 

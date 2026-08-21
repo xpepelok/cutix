@@ -1820,10 +1820,10 @@ fn a_rate_whose_frame_is_not_whole_ticks_still_streams_at_the_right_speed() {
     let started = std::time::Instant::now();
     let mut seen: Vec<MediaTime> = Vec::new();
     while seen.len() < 3 && started.elapsed().as_secs_f64() < 20.0 {
-        if let Some(slot) = controller.latest_frame() {
-            if seen.last() != Some(&slot.time) {
-                seen.push(slot.time);
-            }
+        if let Some(slot) = controller.latest_frame()
+            && seen.last() != Some(&slot.time)
+        {
+            seen.push(slot.time);
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

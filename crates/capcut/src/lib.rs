@@ -184,10 +184,10 @@ fn label_for(draft: &Draft, material_id: &str, kind: SlotKind, index: usize) -> 
     if let Some(sticker) = draft.stickers.get(material_id) {
         return sticker.name.clone();
     }
-    if let Some(text) = draft.texts.get(material_id) {
-        if !text.content.is_empty() {
-            return text.content.chars().take(40).collect();
-        }
+    if let Some(text) = draft.texts.get(material_id)
+        && !text.content.is_empty()
+    {
+        return text.content.chars().take(40).collect();
     }
     format!("{kind:?} {index}")
 }

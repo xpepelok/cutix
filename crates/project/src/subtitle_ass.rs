@@ -333,17 +333,17 @@ fn style_overrides(
     }
 
     let border_style = number(style, "borderstyle");
-    if let Some(back) = field(style, "backcolour").and_then(parse_ass_color) {
-        if border_style.map(|value| value.round() as i64) == Some(3) {
-            overrides.background = Some(SubtitleBackground {
-                enabled: back.alpha > 0.0,
-                color: if back.alpha > 0.0 {
-                    back.css_color
-                } else {
-                    String::from("transparent")
-                },
-            });
-        }
+    if let Some(back) = field(style, "backcolour").and_then(parse_ass_color)
+        && border_style.map(|value| value.round() as i64) == Some(3)
+    {
+        overrides.background = Some(SubtitleBackground {
+            enabled: back.alpha > 0.0,
+            color: if back.alpha > 0.0 {
+                back.css_color
+            } else {
+                String::from("transparent")
+            },
+        });
     }
 
     let border_code = border_style.map(|value| value.round() as i64);

@@ -35,7 +35,7 @@ edition = "2024"
 # The minimum toolchain the workspace is tested against. Edition 2024 needs 1.85; the CI
 # matrix pins this exact version alongside stable so a newer feature cannot slip in
 # unnoticed. Raise it deliberately, in its own change, with a note in the release notes.
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/xpepelok/cutix"
 

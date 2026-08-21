@@ -425,10 +425,10 @@ impl NativeStream {
 
     fn index_covering(&mut self, seconds: f64) {
         while self.indexed_through < self.sample_count {
-            if let Some(last) = self.index.last() {
-                if last.start_seconds > seconds {
-                    return;
-                }
+            if let Some(last) = self.index.last()
+                && last.start_seconds > seconds
+            {
+                return;
             }
             self.extend_index_to(self.indexed_through + 64);
         }

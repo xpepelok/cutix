@@ -298,10 +298,10 @@ pub fn fill_extras(connection: &mut Connection, page: &Page, settings: &PublishS
         settings.paid_promotion,
     );
 
-    if let Some(moderation) = settings.comments.moderation_index() {
-        if moderation > 0 {
-            pick_option(connection, page, css::MODERATION_SELECT, moderation);
-        }
+    if let Some(moderation) = settings.comments.moderation_index()
+        && moderation > 0
+    {
+        pick_option(connection, page, css::MODERATION_SELECT, moderation);
     }
     if !settings.comments.enabled() {
         pick_last_option(connection, page, css::COMMENTS_SELECT);

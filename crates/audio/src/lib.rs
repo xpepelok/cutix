@@ -74,10 +74,11 @@ pub fn ducking_envelope(voice: &[f32], options: &DuckingOptions) -> Vec<GainPoin
 
     let mut points: Vec<GainPoint> = Vec::new();
     let push = |time: f32, gain: f32, points: &mut Vec<GainPoint>| {
-        if let Some(last) = points.last() {
-            if (last.time - time).abs() < 1e-6 && (last.gain - gain).abs() < 1e-6 {
-                return;
-            }
+        if let Some(last) = points.last()
+            && (last.time - time).abs() < 1e-6
+            && (last.gain - gain).abs() < 1e-6
+        {
+            return;
         }
         points.push(GainPoint {
             time: time.max(0.0),
@@ -200,10 +201,10 @@ pub fn detect_onsets(samples: &[f32], options: &OnsetOptions) -> Vec<f32> {
         if flux[index] < flux[index - 1] || flux[index] < flux[index + 1] {
             continue;
         }
-        if let Some(previous) = last_index {
-            if index - previous < min_frames {
-                continue;
-            }
+        if let Some(previous) = last_index
+            && index - previous < min_frames
+        {
+            continue;
         }
 
         onsets.push((index + 1) as f32 * seconds_per_frame);

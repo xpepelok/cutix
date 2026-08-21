@@ -18,7 +18,9 @@ pub const TIMESCALE: u32 = 90_000;
 pub fn audio_sample_duration(sample_rate: u32) -> Option<u32> {
     let numerator = TIMESCALE as u64 * crate::aac::AAC_FRAME_SAMPLES as u64;
     let denominator = sample_rate.max(1) as u64;
-    (numerator % denominator == 0).then(|| (numerator / denominator) as u32)
+    numerator
+        .is_multiple_of(denominator)
+        .then(|| (numerator / denominator) as u32)
 }
 
 /// How audio will be delivered for an MP4 written by this sink.
@@ -154,10 +156,10 @@ impl Mp4Sink {
 
     pub fn push_annex_b(&mut self, annex_b: &[u8], is_sync: bool) -> Result<()> {
         let (sets, payload) = split_annex_b(annex_b);
-        if let Some(sets) = sets {
-            if self.parameter_sets.is_none() {
-                self.parameter_sets = Some(sets);
-            }
+        if let Some(sets) = sets
+            && self.parameter_sets.is_none()
+        {
+            self.parameter_sets = Some(sets);
         }
         if payload.is_empty() {
             return Err(ExportError::Encoder(format!(

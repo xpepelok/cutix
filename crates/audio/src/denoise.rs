@@ -172,7 +172,7 @@ mod tests {
         full.into_iter()
             .enumerate()
             .map(|(index, value)| {
-                if (index / period) % 2 == 0 {
+                if (index / period).is_multiple_of(2) {
                     value
                 } else {
                     0.0

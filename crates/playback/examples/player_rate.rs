@@ -67,11 +67,11 @@ fn main() {
     let mut presented = 0u64;
     let mut last = 0u64;
     while started.elapsed().as_secs_f64() < seconds {
-        if let Some(slot) = controller.latest_frame() {
-            if slot.revision != last {
-                last = slot.revision;
-                presented += 1;
-            }
+        if let Some(slot) = controller.latest_frame()
+            && slot.revision != last
+        {
+            last = slot.revision;
+            presented += 1;
         }
         std::thread::sleep(Duration::from_micros(500));
     }

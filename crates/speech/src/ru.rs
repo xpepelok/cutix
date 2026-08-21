@@ -625,10 +625,10 @@ fn apply_voicing(letters: &[char]) -> Vec<char> {
                     if let Some(voiced) = voiceless_pair(letter) {
                         output[index] = voiced;
                     }
-                } else if is_voiceless_obstruent(following) {
-                    if let Some(voiceless) = voiced_pair(letter) {
-                        output[index] = voiceless;
-                    }
+                } else if is_voiceless_obstruent(following)
+                    && let Some(voiceless) = voiced_pair(letter)
+                {
+                    output[index] = voiceless;
                 }
             }
             _ => {}

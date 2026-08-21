@@ -1,3 +1,4 @@
+#[cfg(any(windows, test))]
 pub const APP_ID: &str = "xpepelok.cutix";
 
 #[cfg(windows)]
@@ -186,9 +187,6 @@ pub fn published(title: &str, url: &str) -> bool {
 }
 
 #[cfg(not(windows))]
-pub fn prepare() {}
-
-#[cfg(not(windows))]
 pub fn published(_title: &str, _url: &str) -> bool {
     false
 }
@@ -276,6 +274,7 @@ pub fn copy_link(_url: &str) -> bool {
     false
 }
 
+#[cfg(any(windows, test))]
 pub const MOVE_WITH_MOUSE: u32 = 0xf010 | 0x0002;
 
 #[cfg(windows)]
@@ -302,11 +301,6 @@ pub fn window_is_maximized() -> bool {
     use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
 
     own_window().is_some_and(|window| unsafe { IsZoomed(window) }.as_bool())
-}
-
-#[cfg(not(windows))]
-pub fn window_is_maximized() -> bool {
-    false
 }
 
 #[cfg(windows)]

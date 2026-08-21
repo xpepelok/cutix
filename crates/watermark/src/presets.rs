@@ -62,11 +62,11 @@ pub fn apply_watermark_preset(
     available_image_ids: &HashSet<String>,
 ) -> TWatermark {
     let mut watermark = preset.watermark.clone();
-    if let Some(TWatermarkSource::Image { media_id }) = &watermark.source {
-        if !available_image_ids.contains(media_id) {
-            watermark.source = None;
-            watermark.enabled = false;
-        }
+    if let Some(TWatermarkSource::Image { media_id }) = &watermark.source
+        && !available_image_ids.contains(media_id)
+    {
+        watermark.source = None;
+        watermark.enabled = false;
     }
     watermark
 }

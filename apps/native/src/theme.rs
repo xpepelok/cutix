@@ -287,17 +287,17 @@ fn optimal_interval(pixels_per_frame: f32, fps: f32, candidates: &[u32], minimum
 }
 
 fn ensure_tick_divides_label(tick: u32, label: u32, fps: f32) -> u32 {
-    if label % tick == 0 {
+    if label.is_multiple_of(tick) {
         return tick;
     }
     for frames in TICK_FRAME_INTERVALS.iter().filter(|f| **f >= tick) {
-        if label % frames == 0 {
+        if label.is_multiple_of(*frames) {
             return *frames;
         }
     }
     for seconds in SECOND_MULTIPLIERS {
         let frames = (*seconds as f32 * fps).round() as u32;
-        if frames >= tick && frames > 0 && label % frames == 0 {
+        if frames >= tick && frames > 0 && label.is_multiple_of(frames) {
             return frames;
         }
     }

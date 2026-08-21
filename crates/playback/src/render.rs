@@ -590,10 +590,10 @@ impl FrameComposer {
                     let clip_time = request.time - base.start_time;
                     let offset = crate::retime::source_offset(params.retime, clip_time);
                     let mut source = base.trim_start + offset;
-                    if let Some(limit) = base.source_duration {
-                        if limit.as_ticks() > 0 {
-                            source = source.min(limit - MediaTime::ONE_TICK);
-                        }
+                    if let Some(limit) = base.source_duration
+                        && limit.as_ticks() > 0
+                    {
+                        source = source.min(limit - MediaTime::ONE_TICK);
                     }
                     let source = source.max(MediaTime::ZERO);
                     source_ticks = Some(source.as_ticks() as f64);

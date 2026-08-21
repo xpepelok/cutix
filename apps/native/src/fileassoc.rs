@@ -1,11 +1,17 @@
 use std::path::Path;
 
+#[cfg(any(windows, test))]
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "m4v", "mov"];
+#[cfg(any(windows, test))]
 pub const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "wav"];
 
+#[cfg(any(windows, test))]
 pub const APPLICATION_KEY: &str = "Software\\cutix";
+#[cfg(any(windows, test))]
 pub const CAPABILITIES_KEY: &str = "Software\\cutix\\Capabilities";
+#[cfg(any(windows, test))]
 pub const REGISTERED_APPLICATIONS_KEY: &str = "Software\\RegisteredApplications";
+#[cfg(any(windows, test))]
 pub const APPLICATION_NAME: &str = "cutix";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +21,7 @@ pub enum Group {
 }
 
 impl Group {
+    #[cfg(any(windows, test))]
     pub fn extensions(self) -> &'static [&'static str] {
         match self {
             Group::Video => VIDEO_EXTENSIONS,
@@ -24,6 +31,7 @@ impl Group {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 pub enum Op {
     SetValue {
         key: String,
@@ -44,8 +52,10 @@ pub enum Op {
     },
 }
 
+#[cfg(any(windows, test))]
 const FOLDER_VERB: &str = "cutix.Browse";
 
+#[cfg(any(windows, test))]
 fn folder_verb_keys() -> [String; 3] {
     [
         format!(r"Software\Classes\Directory\shell\{FOLDER_VERB}"),
@@ -54,12 +64,15 @@ fn folder_verb_keys() -> [String; 3] {
     ]
 }
 
+#[cfg(any(windows, test))]
 const FILE_VERBS: [(&str, &str); 2] = [("cutix.Edit", ""), ("cutix.Publish", " --publish")];
 
+#[cfg(any(windows, test))]
 fn file_verb_key(extension: &str, verb: &str) -> String {
     format!(r"Software\Classes\SystemFileAssociations\.{extension}\shell\{verb}")
 }
 
+#[cfg(any(windows, test))]
 pub fn plan_register_file_verbs(executable: &Path, labels: [&str; 2]) -> Vec<Op> {
     let exe = executable.display().to_string();
     let mut ops = Vec::new();
@@ -88,6 +101,7 @@ pub fn plan_register_file_verbs(executable: &Path, labels: [&str; 2]) -> Vec<Op>
     ops
 }
 
+#[cfg(any(windows, test))]
 pub fn plan_unregister_file_verbs() -> Vec<Op> {
     let mut ops = Vec::new();
     for extension in all_extensions() {
@@ -111,6 +125,7 @@ pub fn register_file_verbs(_labels: [&str; 2]) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 pub fn plan_register_folder_verb(executable: &Path, label: &str) -> Vec<Op> {
     let exe = executable.display().to_string();
     let mut ops = Vec::new();
@@ -136,6 +151,7 @@ pub fn plan_register_folder_verb(executable: &Path, label: &str) -> Vec<Op> {
     ops
 }
 
+#[cfg(any(windows, test))]
 pub fn plan_unregister_folder_verb() -> Vec<Op> {
     folder_verb_keys()
         .into_iter()
@@ -154,18 +170,22 @@ pub fn register_folder_verb(_label: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(windows, test))]
 pub fn progid(extension: &str) -> String {
     format!("cutix.{extension}")
 }
 
+#[cfg(any(windows, test))]
 fn class_key(extension: &str) -> String {
     format!("Software\\Classes\\{}", progid(extension))
 }
 
+#[cfg(any(windows, test))]
 fn extension_key(extension: &str) -> String {
     format!("Software\\Classes\\.{extension}")
 }
 
+#[cfg(any(windows, test))]
 pub fn extensions_for(groups: &[Group]) -> Vec<&'static str> {
     let mut extensions: Vec<&'static str> = groups
         .iter()
@@ -176,10 +196,12 @@ pub fn extensions_for(groups: &[Group]) -> Vec<&'static str> {
     extensions
 }
 
+#[cfg(any(windows, test))]
 pub fn all_extensions() -> Vec<&'static str> {
     extensions_for(&[Group::Video, Group::Audio])
 }
 
+#[cfg(any(windows, test))]
 pub fn plan_register(executable: &Path, groups: &[Group]) -> Vec<Op> {
     let exe = executable.display().to_string();
     let mut ops = plan_forget_previous_name();
@@ -231,8 +253,10 @@ pub fn plan_register(executable: &Path, groups: &[Group]) -> Vec<Op> {
     ops
 }
 
+#[cfg(any(windows, test))]
 const PREVIOUS_NAME: &str = "OpenCut";
 
+#[cfg(any(windows, test))]
 pub fn plan_forget_previous_name() -> Vec<Op> {
     let mut ops = Vec::new();
 
@@ -270,6 +294,7 @@ pub fn plan_forget_previous_name() -> Vec<Op> {
     ops
 }
 
+#[cfg(any(windows, test))]
 pub fn plan_unregister() -> Vec<Op> {
     let mut ops = Vec::new();
 
@@ -296,6 +321,7 @@ pub fn plan_unregister() -> Vec<Op> {
     ops
 }
 
+#[cfg(any(windows, test))]
 pub fn executable() -> Option<std::path::PathBuf> {
     std::env::current_exe().ok()
 }
@@ -319,11 +345,6 @@ pub fn register(_groups: &[Group]) -> Result<(), String> {
 #[cfg(not(windows))]
 pub fn unregister() -> Result<(), String> {
     Ok(())
-}
-
-#[cfg(not(windows))]
-pub fn is_registered() -> bool {
-    false
 }
 
 #[cfg(windows)]

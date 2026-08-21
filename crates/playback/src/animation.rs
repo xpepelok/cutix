@@ -21,10 +21,10 @@ fn lookup<'a>(
     path: &str,
     component: &str,
 ) -> Option<&'a AnimationChannel> {
-    if let Some(id) = channel_id_for(animations, path, component) {
-        if let Some(channel) = animations.channels.get(&id) {
-            return Some(channel);
-        }
+    if let Some(id) = channel_id_for(animations, path, component)
+        && let Some(channel) = animations.channels.get(&id)
+    {
+        return Some(channel);
     }
     animations
         .channels
