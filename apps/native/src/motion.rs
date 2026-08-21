@@ -387,6 +387,9 @@ pub fn build_motion_patch(request: &PatchRequest<'_>) -> Option<MotionPatch> {
     })
 }
 
+/// Only the tests in this file ask for this; compiled for them alone so the shipping
+/// binary does not carry something nothing calls.
+#[cfg(test)]
 pub fn sample_at(keyframes: &[MotionKeyframe], time: i64) -> Option<MotionKeyframe> {
     let first = keyframes.first()?;
     let last = keyframes.last()?;

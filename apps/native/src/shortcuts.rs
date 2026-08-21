@@ -10,20 +10,11 @@ const DIALOG_WIDTH_PX: f32 = 512.0;
 const BODY_MAX_HEIGHT_PX: f32 = 460.0;
 const BACKDROP_OPACITY: f32 = 0.55;
 
+#[derive(Default)]
 pub struct ShortcutsState {
     pub open: bool,
     pub recording: Option<Action>,
     pub notice: Option<SharedString>,
-}
-
-impl Default for ShortcutsState {
-    fn default() -> Self {
-        Self {
-            open: false,
-            recording: None,
-            notice: None,
-        }
-    }
 }
 
 impl ShortcutsState {
@@ -40,7 +31,13 @@ impl ShortcutsState {
     }
 }
 
-pub fn rows(bindings: &Keybindings) -> Vec<(Category, Vec<(Action, Vec<Chord>)>)> {
+/// An action together with every chord currently bound to it.
+pub type BoundAction = (Action, Vec<Chord>);
+
+/// One section of the shortcut sheet: a category and the actions filed under it.
+pub type ShortcutRow = (Category, Vec<BoundAction>);
+
+pub fn rows(bindings: &Keybindings) -> Vec<ShortcutRow> {
     Category::ALL
         .into_iter()
         .filter_map(|category| {

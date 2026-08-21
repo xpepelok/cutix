@@ -134,7 +134,7 @@ pub trait Hoverable: 'static {
 fn hover_listener<V: Hoverable + Render>(
     id: &'static str,
     cx: &mut Context<V>,
-) -> Box<dyn Fn(&bool, &mut Window, &mut App) + 'static> {
+) -> crate::components::HoverHandler {
     Box::new(cx.listener(move |this: &mut V, hovered: &bool, _, cx| {
         this.transitions().set(id, *hovered);
         this.tooltips().hover(id, *hovered);
@@ -142,9 +142,7 @@ fn hover_listener<V: Hoverable + Render>(
     }))
 }
 
-fn press_listener<V: Hoverable + Render>(
-    cx: &mut Context<V>,
-) -> Box<dyn Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static> {
+fn press_listener<V: Hoverable + Render>(cx: &mut Context<V>) -> crate::components::PressHandler {
     Box::new(cx.listener(move |this: &mut V, _, _, cx| {
         this.tooltips().dismiss();
         cx.notify();
@@ -314,10 +312,20 @@ pub struct AssetsPanel {
     publish_preview: Option<crate::preview::FrameWorker>,
     publish_speaker: crate::preview_audio::Speaker,
 
-    publish_bar_bounds: (f32, f32),
     job: Option<crate::ai::Job>,
 
     rasterizer: Option<cutix_playback::TextRasterizer>,
+}
+
+/// One watermark setting shown as a labelled slider with preset pills beside it.
+struct WatermarkScaleRow<'label> {
+    label: &'label str,
+    /// Stable element id, so the row keeps its hover and focus state across redraws.
+    id: &'static str,
+    /// The value the setting holds right now.
+    current: f64,
+    /// The quick-pick values, each with the text on its pill.
+    presets: &'static [(f64, &'static str)],
 }
 
 impl AssetsPanel {
@@ -373,7 +381,6 @@ impl AssetsPanel {
             audio_preview: None,
             publish_preview: None,
             publish_speaker: crate::preview_audio::Speaker::default(),
-            publish_bar_bounds: (0.0, 0.0),
             job: None,
             rasterizer: None,
         }
@@ -1375,9 +1382,9 @@ impl AssetsPanel {
         )
         .on_key_down(
             cx.listener(|this: &mut Self, event: &gpui::KeyDownEvent, _, cx| {
-                match this.sticker_search.buffer.key_down(event) {
-                    crate::input::TextEvent::Cancel => this.sticker_search.buffer.set(""),
-                    _ => {}
+                if let crate::input::TextEvent::Cancel = this.sticker_search.buffer.key_down(event)
+                {
+                    this.sticker_search.buffer.set("")
                 }
                 cx.notify();
             }),
@@ -3091,7 +3098,7 @@ impl AssetsPanel {
                     let kind = effects_ui::TRANSITION_KEYS[index].0;
                     this.apply_transition(kind, cx);
                 }))
-                .on_drag(ClipTargetDrag::Transition(*id), |_, _, _, cx| {
+                .on_drag(ClipTargetDrag::Transition(id), |_, _, _, cx| {
                     cx.new(|_| gpui::Empty)
                 })
             })
@@ -3256,7 +3263,7 @@ impl AssetsPanel {
         {
             dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
         } else if let Some(dialog) =
-            crate::youtube_ui::render::sign_in_dialog(&mut self.youtube, colors, window, cx)
+            crate::youtube_ui::render::sign_in_dialog(&self.youtube, colors, window, cx)
         {
             dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
         } else if let Some(dialog) =
@@ -3595,7 +3602,7 @@ impl AssetsPanel {
         if !form.preview_playing {
             return;
         }
-        self.publish_speaker.feed(form.preview_position);
+        self.publish_speaker.feed(form.preview_position, 1.0);
     }
 
     fn ensure_publish_sound(&mut self, cx: &mut Context<Self>) {
@@ -3749,7 +3756,13 @@ impl AssetsPanel {
 
             let _ = this.update(cx, |this, cx| {
                 this.youtube.refreshing = false;
-                let Ok((title, handle, avatar_url, avatar)) = found else {
+                let Ok(youtube::session::ChannelDecorations {
+                    title,
+                    handle,
+                    avatar_url,
+                    avatar,
+                }) = found
+                else {
                     return;
                 };
                 if let Some(account) = this
@@ -4463,13 +4476,16 @@ impl AssetsPanel {
     fn watermark_scale_row(
         &mut self,
         colors: Palette,
-        label: &str,
-        id: &'static str,
-        current: f64,
-        presets: &'static [(f64, &'static str)],
+        row: WatermarkScaleRow<'_>,
         cx: &mut Context<Self>,
         apply: impl Fn(&mut watermark::TWatermark, f64) + Copy + 'static,
     ) -> Div {
+        let WatermarkScaleRow {
+            label,
+            id,
+            current,
+            presets,
+        } = row;
         let pills = presets
             .iter()
             .map(|(value, text)| {
@@ -4603,10 +4619,12 @@ impl AssetsPanel {
         );
         content = content.child(self.watermark_scale_row(
             colors,
-            &t("watermark.offset.x"),
-            "wm-margin",
-            mark.offset.x,
-            &[(0.0, "0%"), (0.03, "3%"), (0.05, "5%"), (0.08, "8%")],
+            WatermarkScaleRow {
+                label: &t("watermark.offset.x"),
+                id: "wm-margin",
+                current: mark.offset.x,
+                presets: &[(0.0, "0%"), (0.03, "3%"), (0.05, "5%"), (0.08, "8%")],
+            },
             cx,
             |mark, value| {
                 mark.offset.x = value;
@@ -4618,28 +4636,34 @@ impl AssetsPanel {
         content = content
             .child(self.watermark_scale_row(
                 colors,
-                &t("watermark.size"),
-                "wm-size",
-                mark.size,
-                &[(0.1, "10%"), (0.18, "18%"), (0.25, "25%"), (0.4, "40%")],
+                WatermarkScaleRow {
+                    label: &t("watermark.size"),
+                    id: "wm-size",
+                    current: mark.size,
+                    presets: &[(0.1, "10%"), (0.18, "18%"), (0.25, "25%"), (0.4, "40%")],
+                },
                 cx,
                 |mark, value| mark.size = value,
             ))
             .child(self.watermark_scale_row(
                 colors,
-                &t("watermark.opacity"),
-                "wm-opacity",
-                mark.opacity,
-                &[(0.3, "30%"), (0.5, "50%"), (0.7, "70%"), (1.0, "100%")],
+                WatermarkScaleRow {
+                    label: &t("watermark.opacity"),
+                    id: "wm-opacity",
+                    current: mark.opacity,
+                    presets: &[(0.3, "30%"), (0.5, "50%"), (0.7, "70%"), (1.0, "100%")],
+                },
                 cx,
                 |mark, value| mark.opacity = value,
             ))
             .child(self.watermark_scale_row(
                 colors,
-                &t("watermark.rotation"),
-                "wm-rotation",
-                mark.rotation,
-                &[(0.0, "0"), (-15.0, "-15"), (-30.0, "-30"), (-45.0, "-45")],
+                WatermarkScaleRow {
+                    label: &t("watermark.rotation"),
+                    id: "wm-rotation",
+                    current: mark.rotation,
+                    presets: &[(0.0, "0"), (-15.0, "-15"), (-30.0, "-30"), (-45.0, "-45")],
+                },
                 cx,
                 |mark, value| mark.rotation = value,
             ));
@@ -4682,19 +4706,23 @@ impl AssetsPanel {
             content = content
                 .child(self.watermark_scale_row(
                     colors,
-                    &t("watermark.tiling.spacing"),
-                    "wm-tile-spacing",
-                    mark.tiling.spacing,
-                    &[(0.2, "20%"), (0.6, "60%"), (1.0, "100%"), (2.0, "200%")],
+                    WatermarkScaleRow {
+                        label: &t("watermark.tiling.spacing"),
+                        id: "wm-tile-spacing",
+                        current: mark.tiling.spacing,
+                        presets: &[(0.2, "20%"), (0.6, "60%"), (1.0, "100%"), (2.0, "200%")],
+                    },
                     cx,
                     |mark, value| mark.tiling.spacing = value,
                 ))
                 .child(self.watermark_scale_row(
                     colors,
-                    &t("watermark.tiling.angle"),
-                    "wm-tile-angle",
-                    mark.tiling.angle,
-                    &[(0.0, "0"), (15.0, "15"), (30.0, "30"), (45.0, "45")],
+                    WatermarkScaleRow {
+                        label: &t("watermark.tiling.angle"),
+                        id: "wm-tile-angle",
+                        current: mark.tiling.angle,
+                        presets: &[(0.0, "0"), (15.0, "15"), (30.0, "30"), (45.0, "45")],
+                    },
                     cx,
                     |mark, value| mark.tiling.angle = value,
                 ))
@@ -4957,7 +4985,7 @@ impl crate::youtube_ui::render::Host for AssetsPanel {
     ) {
         use crate::youtube_ui::render::Action;
         match action {
-            Action::StartSetup | Action::AddAccount => {
+            Action::AddAccount => {
                 self.youtube.notice = None;
                 self.open_youtube_sign_in(cx);
             }
@@ -4994,6 +5022,7 @@ impl crate::youtube_ui::render::Host for AssetsPanel {
 
             Action::CloseSession => {
                 self.youtube.should_close = true;
+                self.youtube.dismissed = true;
                 self.youtube.published = None;
                 self.youtube.session.clear();
                 self.youtube.notice = None;
@@ -5421,6 +5450,8 @@ struct LayerGesture {
 
 const LAYER_ROTATE_DEGREES_PER_PX: f64 = 0.5;
 const LAYER_HANDLE_PX: f32 = 10.0;
+
+const CLICK_SLOP_PX: f32 = 3.0;
 
 pub struct PreviewPanel {
     app: Entity<AppModel>,
@@ -6692,13 +6723,23 @@ impl PreviewPanel {
 
         Some(
             crate::components::overlay_root()
-                .child(overlay_backdrop("guide-backdrop").on_mouse_up(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.guide_menu.dismiss();
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("guide-backdrop")
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.guide_menu.dismiss();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.guide_menu.dismiss();
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::BottomLeft,
                     placement,
@@ -6765,13 +6806,23 @@ impl PreviewPanel {
 
         Some(
             crate::components::overlay_root()
-                .child(overlay_backdrop("zoom-backdrop").on_mouse_up(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.zoom_menu.dismiss();
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("zoom-backdrop")
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.zoom_menu.dismiss();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.zoom_menu.dismiss();
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::BottomLeft,
                     placement,
@@ -7517,7 +7568,7 @@ impl Render for PreviewPanel {
         let playing = self.app.read(cx).preview.is_playing();
         if playing {
             let now = self.app.read(cx).preview.current_time();
-            let end = self.app.read(cx).total_duration();
+            let end = self.app.read(cx).content_duration();
             if end > MediaTime::ZERO && now >= end {
                 self.app.update(cx, |model, cx| {
                     model.preview.pause();
@@ -7620,7 +7671,15 @@ impl Render for PreviewPanel {
                                  event: &gpui::MouseUpEvent,
                                  window: &mut Window,
                                  cx| {
-                                    let ended = this.gesture.take().is_some()
+                                    let travelled = |from: gpui::Point<gpui::Pixels>| {
+                                        let across = f32::from(event.position.x - from.x).abs();
+                                        let down = f32::from(event.position.y - from.y).abs();
+                                        across > CLICK_SLOP_PX || down > CLICK_SLOP_PX
+                                    };
+                                    let ended = this
+                                        .gesture
+                                        .take()
+                                        .is_some_and(|gesture| travelled(gesture.start))
                                         | this.mask_gesture.take().is_some()
                                         | this.tracking_gesture.take().is_some()
                                         | this.rotate_gesture.take().is_some()
@@ -7688,6 +7747,8 @@ impl Render for PreviewPanel {
 }
 
 pub const TIMELINE_ZOOM_MIN: f32 = 0.1;
+pub const TIMELINE_ZOOM_FLOOR: f32 = 0.0002;
+pub const TIMELINE_FIT_WIDTH_PX: f32 = 1_200.0;
 pub const TIMELINE_ZOOM_MAX: f32 = 100.0;
 pub const TIMELINE_ZOOM_BUTTON_FACTOR: f32 = 1.7;
 
@@ -7713,13 +7774,15 @@ pub fn zoom_anchored_offset(
     (anchor_x - into_content * scale - viewport_left).min(0.0)
 }
 
-pub fn zoom_from_slider(slider: f32) -> f32 {
-    TIMELINE_ZOOM_MIN * (TIMELINE_ZOOM_MAX / TIMELINE_ZOOM_MIN).powf(slider.clamp(0.0, 1.0))
+pub fn zoom_from_slider_above(slider: f32, floor: f32) -> f32 {
+    let floor = floor.clamp(TIMELINE_ZOOM_FLOOR, TIMELINE_ZOOM_MIN);
+    floor * (TIMELINE_ZOOM_MAX / floor).powf(slider.clamp(0.0, 1.0))
 }
 
-pub fn slider_from_zoom(zoom: f32) -> f32 {
-    let zoom = zoom.clamp(TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_MAX);
-    (zoom / TIMELINE_ZOOM_MIN).ln() / (TIMELINE_ZOOM_MAX / TIMELINE_ZOOM_MIN).ln()
+pub fn slider_from_zoom_above(zoom: f32, floor: f32) -> f32 {
+    let floor = floor.clamp(TIMELINE_ZOOM_FLOOR, TIMELINE_ZOOM_MIN);
+    let zoom = zoom.clamp(floor, TIMELINE_ZOOM_MAX);
+    (zoom / floor).ln() / (TIMELINE_ZOOM_MAX / floor).ln()
 }
 
 #[derive(Debug)]
@@ -7806,6 +7869,7 @@ pub struct TimelinePanel {
     bookmark_drag: Option<(MediaTime, MediaTime)>,
     scene_rename: Option<(String, TextField)>,
     zoom_level: f32,
+    zoom_span: MediaTime,
     snapping: bool,
     ripple: bool,
     ghost: Option<Ghost>,
@@ -7859,6 +7923,7 @@ impl TimelinePanel {
             bookmark_drag: None,
             scene_rename: None,
             zoom_level: DEFAULT_TIMELINE_ZOOM,
+            zoom_span: MediaTime::ZERO,
             snapping: true,
             ripple: false,
             ghost: None,
@@ -7900,8 +7965,18 @@ impl TimelinePanel {
             .unwrap_or(MediaTime::ZERO)
     }
 
+    fn zoom_floor(&self, duration: MediaTime) -> f32 {
+        let seconds = duration.to_seconds_f64() as f32;
+        if seconds <= 0.0 {
+            return TIMELINE_ZOOM_MIN;
+        }
+        let fitting = TIMELINE_FIT_WIDTH_PX / (seconds * BASE_TIMELINE_PIXELS_PER_SECOND);
+        fitting.clamp(TIMELINE_ZOOM_FLOOR, TIMELINE_ZOOM_MIN)
+    }
+
     fn nudge_zoom(&mut self, factor: f32) {
-        self.zoom_level = (self.zoom_level * factor).clamp(TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_MAX);
+        let floor = self.zoom_floor(self.zoom_span);
+        self.zoom_level = (self.zoom_level * factor).clamp(floor, TIMELINE_ZOOM_MAX);
     }
 
     fn on_timeline_wheel(
@@ -7972,13 +8047,13 @@ impl TimelinePanel {
             return;
         }
         let fraction = (event.event.position.x - bounds.left()) / width;
-        self.zoom_level = zoom_from_slider(fraction);
+        self.zoom_level = zoom_from_slider_above(fraction, self.zoom_floor(self.zoom_span));
         cx.notify();
     }
 
     fn scrub(&mut self, offset_x: f32, cx: &mut Context<Self>) {
         let fps = self.fps(cx);
-        let total = self.app.read(cx).total_duration();
+        let total = self.app.read(cx).content_duration();
         let time = clamp_playhead(edit::snap_to_frame(self.time_at(offset_x), fps), total);
         self.app.update(cx, |model, cx| model.seek(time, cx));
     }
@@ -8839,13 +8914,23 @@ impl TimelinePanel {
 
         Some(
             crate::components::overlay_root()
-                .child(overlay_backdrop("scene-backdrop").on_mouse_up(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.scene_menu.dismiss();
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("scene-backdrop")
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.scene_menu.dismiss();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.scene_menu.dismiss();
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::TopLeft,
                     placement,
@@ -8935,13 +9020,21 @@ impl TimelinePanel {
         Some(
             crate::components::overlay_root()
                 .child(
-                    overlay_backdrop(SharedString::from(format!("{key}-backdrop"))).on_mouse_up(
-                        gpui::MouseButton::Left,
-                        cx.listener(|this: &mut Self, _, _, cx| {
-                            this.dismiss_menus();
-                            cx.notify();
-                        }),
-                    ),
+                    overlay_backdrop(SharedString::from(format!("{key}-backdrop")))
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.dismiss_menus();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.dismiss_menus();
+                                cx.notify();
+                            }),
+                        ),
                 )
                 .child(overlay_layer(
                     gpui::Corner::TopLeft,
@@ -9341,13 +9434,23 @@ impl TimelinePanel {
 
         Some(
             crate::components::overlay_root()
-                .child(overlay_backdrop("bookmark-backdrop").on_mouse_up(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.dismiss_menus();
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("bookmark-backdrop")
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.dismiss_menus();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.dismiss_menus();
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::TopLeft,
                     placement,
@@ -9425,13 +9528,23 @@ impl TimelinePanel {
 
         Some(
             crate::components::overlay_root()
-                .child(overlay_backdrop("scene-rename-backdrop").on_mouse_up(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.scene_rename = None;
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("scene-rename-backdrop")
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.scene_rename = None;
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.scene_rename = None;
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::TopLeft,
                     placement,
@@ -9936,6 +10049,7 @@ impl Hoverable for TimelinePanel {
 
 impl Render for TimelinePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.zoom_span = self.app.read(cx).total_duration();
         let colors = self.colors(cx);
         let fps = self.fps(cx);
 
@@ -9985,7 +10099,7 @@ impl Render for TimelinePanel {
         let snapping_tip = self.tooltips.frame_for("timeline-snapping");
         let ripple_tip = self.tooltips.frame_for("timeline-ripple");
         let ripple = self.ripple;
-        let slider = slider_from_zoom(self.zoom_level);
+        let slider = slider_from_zoom_above(self.zoom_level, self.zoom_floor(self.zoom_span));
         let scene_progress = self.transitions.eased("timeline-scene");
         let add_track_progress = self.transitions.eased("timeline-add-track");
         let ripple_progress = self.transitions.eased("timeline-ripple");
@@ -10493,13 +10607,15 @@ fn graph_plot_canvas(
                         let fraction = sample as f64 / GRAPH_CURVE_SAMPLES as f64;
                         let tick = left.tick as f64 + (right.tick - left.tick) as f64 * fraction;
                         let value = graph_editor::eval_segment(
-                            left.tick,
-                            left.value,
-                            right.tick,
-                            right.value,
+                            graph_editor::Segment {
+                                left_tick: left.tick,
+                                left_value: left.value,
+                                right_tick: right.tick,
+                                right_value: right.value,
+                                left_right_handle: left.right_handle,
+                                right_left_handle: right.left_handle,
+                            },
                             &left.segment_to_next,
-                            left.right_handle,
-                            right.left_handle,
                             tick.round() as i64,
                         );
                         curve.line_to(point(tick, value));
@@ -10548,10 +10664,25 @@ fn playhead(colors: Palette, x: f32) -> Div {
         )
 }
 
+/// Only the tests in this file ask for this; compiled for them alone so the shipping
+/// binary does not carry something nothing calls.
+#[cfg(test)]
+pub fn zoom_from_slider(slider: f32) -> f32 {
+    TIMELINE_ZOOM_MIN * (TIMELINE_ZOOM_MAX / TIMELINE_ZOOM_MIN).powf(slider.clamp(0.0, 1.0))
+}
+
+/// Only the tests in this file ask for this; compiled for them alone so the shipping
+/// binary does not carry something nothing calls.
+#[cfg(test)]
+pub fn slider_from_zoom(zoom: f32) -> f32 {
+    let zoom = zoom.clamp(TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_MAX);
+    (zoom / TIMELINE_ZOOM_MIN).ln() / (TIMELINE_ZOOM_MAX / TIMELINE_ZOOM_MIN).ln()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Theme, TEXT_BASE};
+    use crate::theme::Theme;
 
     #[test]
     fn every_effect_and_param_label_is_translated() {
@@ -10666,13 +10797,6 @@ mod tests {
     }
 
     #[test]
-    fn text_scale_tokens_stay_in_order() {
-        assert!(TEXT_XS < TEXT_SM);
-        assert!(TEXT_SM < TEXT_BASE);
-        assert!(TEXT_BASE < TEXT_LG);
-    }
-
-    #[test]
     fn the_playhead_paints_with_the_primary_token() {
         let primary = Theme::dark().panel.primary;
         assert_eq!(primary, crate::theme::parse_hsl("hsl(200, 90%, 52%)"));
@@ -10704,6 +10828,39 @@ mod tests {
         assert!(slider_from_zoom(1.0) < slider_from_zoom(10.0));
         assert_eq!(slider_from_zoom(0.001), 0.0);
         assert_eq!(slider_from_zoom(1000.0), 1.0);
+    }
+
+    #[test]
+    fn a_long_timeline_can_zoom_out_far_enough_to_fit_on_screen() {
+        for hours in [1.0f32, 4.0, 10.0] {
+            let seconds = hours * 3_600.0;
+            let floor = (TIMELINE_FIT_WIDTH_PX / (seconds * BASE_TIMELINE_PIXELS_PER_SECOND))
+                .clamp(TIMELINE_ZOOM_FLOOR, TIMELINE_ZOOM_MIN);
+            let width = seconds * BASE_TIMELINE_PIXELS_PER_SECOND * floor;
+            assert!(
+                width <= TIMELINE_FIT_WIDTH_PX + 1.0,
+                "{hours} hours still spans {width} px at the lowest zoom"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_timeline_keeps_the_ordinary_lowest_zoom() {
+        let seconds = 30.0f32;
+        let floor = (TIMELINE_FIT_WIDTH_PX / (seconds * BASE_TIMELINE_PIXELS_PER_SECOND))
+            .clamp(TIMELINE_ZOOM_FLOOR, TIMELINE_ZOOM_MIN);
+        assert_eq!(floor, TIMELINE_ZOOM_MIN);
+    }
+
+    #[test]
+    fn the_slider_spans_whatever_floor_the_timeline_needs() {
+        let floor = 0.001;
+        assert!((zoom_from_slider_above(0.0, floor) - floor).abs() < 1e-6);
+        assert!((zoom_from_slider_above(1.0, floor) - TIMELINE_ZOOM_MAX).abs() < 1e-2);
+        for zoom in [0.002, 0.05, 1.0, 40.0] {
+            let back = zoom_from_slider_above(slider_from_zoom_above(zoom, floor), floor);
+            assert!((back - zoom).abs() < zoom * 0.01, "{zoom} -> {back}");
+        }
     }
 
     #[test]

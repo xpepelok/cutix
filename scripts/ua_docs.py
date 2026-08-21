@@ -33,7 +33,7 @@ def write(path, text):
 
 def cargo_dependencies():
     edges = defaultdict(set)
-    base = os.path.join(ROOT, "rust", "crates")
+    base = os.path.join(ROOT, "crates")
     for name in sorted(os.listdir(base)):
         manifest = os.path.join(base, name, "Cargo.toml")
         if not os.path.isfile(manifest):

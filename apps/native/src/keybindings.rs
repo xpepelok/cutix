@@ -283,10 +283,7 @@ impl Chord {
     pub fn parse(value: &str) -> Option<Chord> {
         let mut chord = Chord::new(false, false, false, "");
         let mut rest = value;
-        loop {
-            let Some((head, tail)) = rest.split_once('+') else {
-                break;
-            };
+        while let Some((head, tail)) = rest.split_once('+') {
             match head {
                 "ctrl" if !chord.control => chord.control = true,
                 "alt" if !chord.alt => chord.alt = true,
@@ -440,6 +437,29 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
+    /// Only the tests in this file ask for this; compiled for them alone so the
+    /// shipping binary does not carry a method nothing calls.
+    #[cfg(test)]
+    pub fn unbind(&mut self, chord: &Chord) {
+        if self.map.remove(chord).is_some() {
+            self.customized = true;
+        }
+    }
+
+    /// Only the tests in this file ask for this; compiled for them alone so the
+    /// shipping binary does not carry a method nothing calls.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Only the tests in this file ask for this; compiled for them alone so the
+    /// shipping binary does not carry a method nothing calls.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     pub fn defaults() -> Self {
         let mut map = BTreeMap::new();
         for (action, chords) in DEFAULT_SHORTCUTS.iter().chain(NATIVE_DEFAULT_SHORTCUTS) {
@@ -494,17 +514,6 @@ impl Keybindings {
         }
     }
 
-    pub fn bind(&mut self, chord: Chord, action: Action) {
-        self.map.insert(chord, action);
-        self.customized = true;
-    }
-
-    pub fn unbind(&mut self, chord: &Chord) {
-        if self.map.remove(chord).is_some() {
-            self.customized = true;
-        }
-    }
-
     pub fn rebind(&mut self, action: Action, chord: Chord) {
         for existing in self.chords_for(action) {
             self.map.remove(&existing);
@@ -515,14 +524,6 @@ impl Keybindings {
 
     pub fn reset(&mut self) {
         *self = Self::defaults();
-    }
-
-    pub fn len(&self) -> usize {
-        self.map.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
     }
 }
 
@@ -784,9 +785,11 @@ mod tests {
 
     #[test]
     fn keystrokes_become_the_chord_they_are_bound_as() {
-        let mut modifiers = Modifiers::default();
-        modifiers.control = true;
-        modifiers.shift = true;
+        let modifiers = Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::default()
+        };
         let chord = Chord::from_keystroke(&keystroke("z", modifiers)).unwrap();
         assert_eq!(chord.to_key_string(), "ctrl+shift+z");
         assert_eq!(

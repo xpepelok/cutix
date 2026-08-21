@@ -1,7 +1,10 @@
-use gpui::{div, prelude::*, px, svg, Context, Entity, FontWeight, Window, WindowControlArea};
+use gpui::{
+    div, prelude::*, px, svg, Context, Entity, FontWeight, MouseButton, MouseDownEvent, Window,
+};
 
 use crate::assets::icon;
 use crate::interaction::{mix, Transitions};
+use crate::notify;
 use crate::state::{AppModel, Route};
 use crate::theme::{opacity, rem, TEXT_XS, TITLEBAR_BUTTON_WIDTH, TITLEBAR_HEIGHT};
 
@@ -73,8 +76,16 @@ impl Render for Titlebar {
                 }))
                 .on_click(cx.listener(move |_, _, window: &mut Window, cx| {
                     match id {
-                        "titlebar-minimize" => window.minimize_window(),
-                        "titlebar-maximize" => window.zoom_window(),
+                        "titlebar-minimize" => {
+                            if !notify::minimize_own_window() {
+                                window.minimize_window();
+                            }
+                        }
+                        "titlebar-maximize" => {
+                            if !notify::toggle_window_maximized() {
+                                window.zoom_window();
+                            }
+                        }
                         _ => window.remove_window(),
                     }
                     cx.notify();
@@ -108,8 +119,28 @@ impl Render for Titlebar {
                     .flex_1()
                     .h_full()
                     .items_center()
+                    .gap(px(8.0))
                     .pl(px(12.0))
-                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_, event: &MouseDownEvent, window: &mut Window, cx| {
+                            if event.click_count >= 2 {
+                                if !notify::toggle_window_maximized() {
+                                    window.zoom_window();
+                                }
+                            } else if !notify::begin_window_drag() {
+                                window.start_window_move();
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        svg()
+                            .size(px(16.0))
+                            .flex_shrink_0()
+                            .path(icon("cutix-logo"))
+                            .text_color(colors.foreground),
+                    )
                     .child(
                         div()
                             .text_size(rem(TEXT_XS))

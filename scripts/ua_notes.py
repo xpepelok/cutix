@@ -15,7 +15,7 @@ ITEM = re.compile(
 def target_path(source, base):
     rel = os.path.relpath(source, base).replace("\\", "/")
     if rel.startswith("crates/"):
-        return "rust/" + rel
+        return rel
     if rel.startswith("src/"):
         rest = rel[4:]
         if rest.endswith(".rs") and "/" not in rest:

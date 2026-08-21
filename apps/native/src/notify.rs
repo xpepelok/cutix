@@ -179,11 +179,6 @@ mod windows_impl {
 }
 
 #[cfg(windows)]
-pub fn prepare() {
-    windows_impl::prepare();
-}
-
-#[cfg(windows)]
 pub fn published(title: &str, url: &str) -> bool {
     let heading = cutix_i18n::t_args("youtube.notify.body", &[("title", title)]);
     let body = cutix_i18n::t("youtube.notify.copy");
@@ -281,48 +276,82 @@ pub fn copy_link(_url: &str) -> bool {
     false
 }
 
+pub const MOVE_WITH_MOUSE: u32 = 0xf010 | 0x0002;
+
 #[cfg(windows)]
-pub fn minimize_own_window() {
+fn post_system_command(command: u32) -> bool {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SendMessageW, ShowWindow, SC_MINIMIZE, SW_MINIMIZE, WM_SYSCOMMAND,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
 
     let Some(window) = own_window() else {
-        return;
+        return false;
     };
     unsafe {
-        SendMessageW(
-            window,
+        PostMessageW(
+            Some(window),
             WM_SYSCOMMAND,
-            Some(WPARAM(SC_MINIMIZE as usize)),
-            Some(LPARAM(0)),
-        );
-        let _ = ShowWindow(window, SW_MINIMIZE);
+            WPARAM(command as usize),
+            LPARAM(0),
+        )
     }
+    .is_ok()
+}
+
+#[cfg(windows)]
+pub fn window_is_maximized() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+
+    own_window().is_some_and(|window| unsafe { IsZoomed(window) }.as_bool())
 }
 
 #[cfg(not(windows))]
-pub fn minimize_own_window() {}
+pub fn window_is_maximized() -> bool {
+    false
+}
 
 #[cfg(windows)]
-pub fn begin_window_drag() {
-    use windows::Win32::Foundation::{LPARAM, WPARAM};
-    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-    use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN};
+pub fn minimize_own_window() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::SC_MINIMIZE;
 
-    let Some(window) = own_window() else {
-        return;
-    };
+    post_system_command(SC_MINIMIZE)
+}
+
+#[cfg(not(windows))]
+pub fn minimize_own_window() -> bool {
+    false
+}
+
+#[cfg(windows)]
+pub fn toggle_window_maximized() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{SC_MAXIMIZE, SC_RESTORE};
+
+    post_system_command(if window_is_maximized() {
+        SC_RESTORE
+    } else {
+        SC_MAXIMIZE
+    })
+}
+
+#[cfg(not(windows))]
+pub fn toggle_window_maximized() -> bool {
+    false
+}
+
+#[cfg(windows)]
+pub fn begin_window_drag() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use windows::Win32::UI::WindowsAndMessaging::SC_RESTORE;
+
+    if own_window().is_none() {
+        return false;
+    }
     unsafe {
         let _ = ReleaseCapture();
-        SendMessageW(
-            window,
-            WM_NCLBUTTONDOWN,
-            Some(WPARAM(HTCAPTION as usize)),
-            Some(LPARAM(0)),
-        );
     }
+    if window_is_maximized() && !post_system_command(SC_RESTORE) {
+        return false;
+    }
+    post_system_command(MOVE_WITH_MOUSE)
 }
 
 #[cfg(windows)]
@@ -350,12 +379,14 @@ fn own_window() -> Option<windows::Win32::Foundation::HWND> {
     unsafe {
         let mut found: isize = 0;
         let _ = EnumWindows(Some(visit), LPARAM(&mut found as *mut isize as isize));
-        (found != 0).then(|| HWND(found as *mut std::ffi::c_void))
+        (found != 0).then_some(HWND(found as *mut std::ffi::c_void))
     }
 }
 
 #[cfg(not(windows))]
-pub fn begin_window_drag() {}
+pub fn begin_window_drag() -> bool {
+    false
+}
 
 #[cfg(test)]
 mod tests {
@@ -373,5 +404,21 @@ mod tests {
     #[test]
     fn the_identifier_is_the_one_the_shortcut_carries() {
         assert_eq!(super::APP_ID, "xpepelok.cutix");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_drag_asks_the_system_to_move_the_window_with_the_mouse() {
+        use windows::Win32::UI::WindowsAndMessaging::{HTCAPTION, SC_MOVE};
+
+        assert_eq!(super::MOVE_WITH_MOUSE, SC_MOVE | HTCAPTION);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn without_windows_there_is_nothing_to_move() {
+        assert!(!super::begin_window_drag());
+        assert!(!super::toggle_window_maximized());
+        assert!(!super::minimize_own_window());
     }
 }

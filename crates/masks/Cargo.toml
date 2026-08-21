@@ -1,0 +1,19 @@
+[package]
+name = "masks"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/masks.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+gpu = { version = "0.1.0", path = "../gpu" }
+wgpu = "29.0.1"
+
+[lints]
+workspace = true

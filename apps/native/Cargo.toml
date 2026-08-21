@@ -1,6 +1,12 @@
 [package]
 name = "cutix"
 version = "0.0.1"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# The GPUI views have not been moved to edition 2024 yet: its closure-capture and
+# temporary-lifetime rules reject a large amount of the view code, and rewriting that
+# belongs in its own change rather than riding along with a manifest cleanup.
 edition = "2021"
 
 [[bin]]
@@ -8,36 +14,36 @@ name = "cutix"
 path = "src/main.rs"
 
 [dependencies]
-audio = { version = "0.1.0", path = "../../rust/crates/audio" }
-capcut = { version = "0.1.0", path = "../../rust/crates/capcut" }
-dsp = { version = "0.1.0", path = "../../rust/crates/dsp" }
+audio = { version = "0.1.0", path = "../../crates/audio" }
+capcut = { version = "0.1.0", path = "../../crates/capcut" }
+dsp = { version = "0.1.0", path = "../../crates/dsp" }
 gpui = "0.2.2"
 ureq = "2.10"
-cutix-i18n = { version = "0.1.0", path = "../../rust/crates/i18n" }
-cutix-export = { version = "0.1.0", path = "../../rust/crates/export" }
-cutix-playback = { version = "0.1.0", path = "../../rust/crates/playback" }
-cutix-project = { version = "0.1.0", path = "../../rust/crates/project" }
-time = { version = "0.1.0", path = "../../rust/crates/time" }
-masks = { version = "0.1.0", path = "../../rust/crates/masks" }
-ml = { version = "0.1.0", path = "../../rust/crates/ml" }
-video = { version = "0.1.0", path = "../../rust/crates/video" }
-speech = { version = "0.1.0", path = "../../rust/crates/speech" }
+cutix-i18n = { version = "0.1.0", path = "../../crates/i18n" }
+cutix-export = { version = "0.1.0", path = "../../crates/export" }
+cutix-playback = { version = "0.1.0", path = "../../crates/playback" }
+cutix-project = { version = "0.1.0", path = "../../crates/project" }
+time = { version = "0.1.0", path = "../../crates/time" }
+masks = { version = "0.1.0", path = "../../crates/masks" }
+ml = { version = "0.1.0", path = "../../crates/ml" }
+video = { version = "0.1.0", path = "../../crates/video" }
+speech = { version = "0.1.0", path = "../../crates/speech" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 smallvec = "1"
-sounds = { version = "0.1.0", path = "../../rust/crates/sounds" }
-watermark = { version = "0.1.0", path = "../../rust/crates/watermark" }
-stickers = { version = "0.1.0", path = "../../rust/crates/stickers" }
-template = { version = "0.1.0", path = "../../rust/crates/template" }
-uuid = { version = "1", features = ["v4"] }
-youtube = { version = "0.1.0", path = "../../rust/crates/youtube" }
+sounds = { version = "0.1.0", path = "../../crates/sounds" }
+watermark = { version = "0.1.0", path = "../../crates/watermark" }
+stickers = { version = "0.1.0", path = "../../crates/stickers" }
+template = { version = "0.1.0", path = "../../crates/template" }
+uuid = { workspace = true }
+youtube = { version = "0.1.0", path = "../../crates/youtube" }
 dirs = "6.0"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["test-support"] }
-tempfile = "3"
+tempfile = { workspace = true }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
@@ -57,3 +63,6 @@ windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]  }
+
+[lints]
+workspace = true

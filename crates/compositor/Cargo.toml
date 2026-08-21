@@ -1,0 +1,18 @@
+[package]
+name = "compositor"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+effects = { version = "0.1.0", path = "../effects" }
+gpu = { version = "0.1.0", path = "../gpu" }
+masks = { version = "0.1.0", path = "../masks" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

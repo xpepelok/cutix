@@ -10,6 +10,7 @@ mod assets;
 mod audio_fx;
 mod calendar;
 mod components;
+mod cues;
 mod cutout;
 mod dialogs;
 mod edit;

@@ -174,7 +174,7 @@ def main():
     which = sys.argv[1]
     changed = 0
     if which == "rust":
-        roots = [os.path.join(ROOT, "rust", "crates"), os.path.join(ROOT, "apps", "native", "src")]
+        roots = [os.path.join(ROOT, "crates"), os.path.join(ROOT, "apps", "native", "src")]
         suffixes = (".rs",)
         strip = strip_rust
     else:

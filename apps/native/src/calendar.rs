@@ -67,6 +67,17 @@ pub fn to_stamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> Stri
     )
 }
 
+pub fn month_key(month: u32) -> String {
+    format!("calendar.month.{}", month.clamp(1, 12))
+}
+
+pub fn weekday_key(index: u32) -> String {
+    format!("calendar.weekday.{}", index.min(6))
+}
+
+/// Only the tests in this file ask for this; compiled for them alone so the shipping
+/// binary does not carry something nothing calls.
+#[cfg(test)]
 pub fn from_stamp(stamp: &str) -> Option<(i32, u32, u32, u32, u32)> {
     let (date, time) = stamp.trim().split_once('T')?;
     let mut date = date.split('-');
@@ -84,14 +95,6 @@ pub fn from_stamp(stamp: &str) -> Option<(i32, u32, u32, u32, u32)> {
         return None;
     }
     Some((year, month, day, hour, minute))
-}
-
-pub fn month_key(month: u32) -> String {
-    format!("calendar.month.{}", month.clamp(1, 12))
-}
-
-pub fn weekday_key(index: u32) -> String {
-    format!("calendar.weekday.{}", index.min(6))
 }
 
 #[cfg(test)]

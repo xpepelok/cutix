@@ -100,8 +100,6 @@ pub fn fit_within(frame: cutix_playback::SourceFrame, limit: Option<u32>) -> (u3
 pub struct FrameOut {
     pub generation: u64,
 
-    pub struggling: bool,
-
     pub timestamp: f64,
     pub image: std::sync::Arc<gpui::RenderImage>,
 }
@@ -119,6 +117,7 @@ pub struct FrameWorker {
     latest: std::sync::Arc<std::sync::Mutex<Option<FrameOut>>>,
 
     failed: std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FrameWorker {
@@ -131,7 +130,7 @@ impl FrameWorker {
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let worker_failed = std::sync::Arc::clone(&failed);
 
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("cutix-hover-preview".into())
             .spawn(move || {
                 let mut cache = cutix_playback::DecodeCache::new();
@@ -159,7 +158,6 @@ impl FrameWorker {
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *slot = Some(FrameOut {
                         generation: request.generation,
-                        struggling: cache.struggling(&key),
                         timestamp,
                         image,
                     });
@@ -171,7 +169,19 @@ impl FrameWorker {
             requests,
             latest,
             failed,
+            worker: Some(worker),
         })
+    }
+
+    pub fn close(mut self) {
+        let Self {
+            requests, worker, ..
+        } = &mut self;
+        let (idle, _) = std::sync::mpsc::channel::<FrameRequest>();
+        drop(std::mem::replace(requests, idle));
+        if let Some(worker) = worker.take() {
+            let _ = worker.join();
+        }
     }
 
     pub fn request(&self, path: PathBuf, at: f64, generation: u64, width: Option<u32>) {
@@ -219,10 +229,6 @@ impl Thumbnails {
         self.durations.get(path).copied()
     }
 
-    pub fn frame_rate(&self, path: &Path) -> Option<f32> {
-        self.rates.get(path).copied()
-    }
-
     pub fn claim<'a>(&mut self, paths: impl Iterator<Item = &'a Path>) -> Vec<PathBuf> {
         if self.in_flight > 0 {
             return Vec::new();
@@ -250,6 +256,13 @@ impl Thumbnails {
         if let Some(image) = probed.image {
             self.images.insert(probed.path, image);
         }
+    }
+
+    pub fn forget(&mut self, path: &Path) {
+        self.images.remove(path);
+        self.durations.remove(path);
+        self.rates.remove(path);
+        self.attempted.remove(path);
     }
 
     pub fn clear(&mut self) {

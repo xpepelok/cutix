@@ -208,6 +208,15 @@ pub const TEXT_XS: f32 = 0.72;
 pub const TEXT_SM: f32 = 0.79;
 pub const TEXT_BASE: f32 = 0.92;
 pub const TEXT_LG: f32 = 1.125;
+
+/// The text ladder has to stay in order for a size name to mean anything relative to its
+/// neighbours. That is a property of these constants, so it is checked when they are
+/// compiled rather than when a test happens to run.
+const _: () = {
+    assert!(TEXT_XS < TEXT_SM);
+    assert!(TEXT_SM < TEXT_BASE);
+    assert!(TEXT_BASE < TEXT_LG);
+};
 pub const TEXT_TAB_LABEL: f32 = 0.6875;
 pub const TEXT_PROJECT_NAME: f32 = 0.9;
 

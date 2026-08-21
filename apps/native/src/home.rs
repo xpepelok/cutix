@@ -11,8 +11,8 @@ use crate::state::{AppModel, Route};
 use crate::theme::{opacity, rem, Palette, RADIUS_LG, RADIUS_MD, TEXT_LG, TEXT_SM, TEXT_XS};
 
 const DESTINATIONS: [(&str, &str, Route); 2] = [
-    ("home.projects", "folder03", Route::Projects),
-    ("home.library", "oc-video", Route::Library),
+    ("home.projects.tile", "folder03", Route::Projects),
+    ("home.library.tile", "oc-video", Route::Library),
 ];
 
 pub struct HomeView {
@@ -72,19 +72,24 @@ impl HomeView {
                 });
             }))
             .child(
-                div()
-                    .size(px(44.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(rem(RADIUS_MD))
-                    .bg(opacity(colors.primary, 0.10 + 0.10 * lift))
-                    .child(
-                        svg()
-                            .size(px(22.0))
-                            .path(icon(glyph))
-                            .text_color(colors.primary),
-                    ),
+                div().flex().child(
+                    div()
+                        .w(px(44.0))
+                        .h(px(44.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(rem(RADIUS_MD))
+                        .bg(opacity(colors.primary, 0.10 + 0.10 * lift))
+                        .child(
+                            svg()
+                                .size(px(22.0))
+                                .flex_none()
+                                .path(icon(glyph))
+                                .text_color(colors.primary),
+                        ),
+                ),
             )
             .child(
                 div()

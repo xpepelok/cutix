@@ -21,13 +21,6 @@ impl Group {
             Group::Audio => AUDIO_EXTENSIONS,
         }
     }
-
-    pub fn label_key(self) -> &'static str {
-        match self {
-            Group::Video => "fileTypes.group.video",
-            Group::Audio => "fileTypes.group.audio",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -318,11 +311,6 @@ pub fn unregister() -> Result<(), String> {
     platform::apply(&plan_unregister())
 }
 
-#[cfg(windows)]
-pub fn is_registered() -> bool {
-    platform::has_key(&class_key("mp4"))
-}
-
 #[cfg(not(windows))]
 pub fn register(_groups: &[Group]) -> Result<(), String> {
     Err("file type registration is only implemented on Windows".to_string())
@@ -346,8 +334,8 @@ mod platform {
     use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
     use windows::Win32::System::Registry::{
         RegCloseKey, RegCreateKeyExW, RegDeleteTreeW, RegDeleteValueW, RegOpenKeyExW,
-        RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_NONE,
-        REG_OPTION_NON_VOLATILE, REG_SZ,
+        RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_NONE, REG_OPTION_NON_VOLATILE,
+        REG_SZ,
     };
     use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
 
@@ -378,26 +366,6 @@ mod platform {
             return Err(format!("cannot create HKCU\\{key} ({})", status.0));
         }
         Ok(handle)
-    }
-
-    pub fn has_key(key: &str) -> bool {
-        let mut handle = HKEY::default();
-        let status = unsafe {
-            RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(wide(key).as_ptr()),
-                Some(0),
-                KEY_READ,
-                &mut handle,
-            )
-        };
-        if status == ERROR_SUCCESS {
-            unsafe {
-                let _ = RegCloseKey(handle);
-            }
-            return true;
-        }
-        false
     }
 
     fn set_string(key: &str, name: &str, value: &str) -> Result<(), String> {

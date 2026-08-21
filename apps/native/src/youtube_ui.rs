@@ -97,9 +97,7 @@ pub fn adopt_profile(
             }
         }
     }
-    Err(last.unwrap_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::Other, "the profile could not be moved")
-    }))
+    Err(last.unwrap_or_else(|| std::io::Error::other("the profile could not be moved")))
 }
 
 const PROFILE_MOVE_ATTEMPTS: usize = 6;
@@ -136,22 +134,10 @@ pub fn run_upload(
     outcome
 }
 
-pub fn parse_day_start(text: &str) -> Option<i64> {
-    let text = text.trim();
-    if text.len() != 10 {
-        return None;
-    }
-    let bytes = text.as_bytes();
-    if bytes[4] != b'-' || bytes[7] != b'-' {
-        return None;
-    }
-    let year: i64 = text[0..4].parse().ok()?;
-    let month: i64 = text[5..7].parse().ok()?;
-    let day: i64 = text[8..10].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-
+pub fn unix_from_civil(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
+    let year = year as i64;
+    let month = month as i64;
+    let day = day as i64;
     let (year, month) = if month <= 2 {
         (year - 1, month + 9)
     } else {
@@ -162,11 +148,7 @@ pub fn parse_day_start(text: &str) -> Option<i64> {
     let day_of_year = (153 * month + 2) / 5 + day - 1;
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     let days = era * 146_097 + day_of_era - 719_468;
-    Some(days * 86_400)
-}
-
-pub fn parse_day_end(text: &str) -> Option<i64> {
-    parse_day_start(text).map(|start| start + 86_399)
+    days * 86_400 + hour.min(23) as i64 * 3_600 + minute.min(59) as i64 * 60
 }
 
 pub fn step_progress(elapsed: f32) -> f32 {
@@ -503,6 +485,10 @@ impl Scheduled {
         }
     }
 
+    pub fn seconds(&self) -> i64 {
+        unix_from_civil(self.year, self.month, self.day, self.hour, self.minute)
+    }
+
     pub fn stamp(&self) -> String {
         crate::calendar::to_stamp(self.year, self.month, self.day, self.hour, self.minute)
     }
@@ -641,10 +627,17 @@ impl PublishForm {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    From,
+    To,
+}
+
 pub struct Filters {
     pub search: TextField,
-    pub from: TextField,
-    pub to: TextField,
+    pub from: Option<Scheduled>,
+    pub to: Option<Scheduled>,
+    pub open: Option<Edge>,
     pub accounts: Vec<String>,
 }
 
@@ -652,17 +645,51 @@ impl Filters {
     pub fn new(cx: &mut gpui::App) -> Self {
         Self {
             search: TextField::new(cx, ""),
-            from: TextField::new(cx, ""),
-            to: TextField::new(cx, ""),
+            from: None,
+            to: None,
+            open: None,
             accounts: Vec::new(),
+        }
+    }
+
+    pub fn edge(&self, edge: Edge) -> Option<Scheduled> {
+        match edge {
+            Edge::From => self.from,
+            Edge::To => self.to,
+        }
+    }
+
+    pub fn edge_mut(&mut self, edge: Edge) -> &mut Option<Scheduled> {
+        match edge {
+            Edge::From => &mut self.from,
+            Edge::To => &mut self.to,
+        }
+    }
+
+    pub fn toggle_picker(&mut self, edge: Edge, now: i64) {
+        if self.open == Some(edge) {
+            self.open = None;
+            return;
+        }
+        self.open = Some(edge);
+        if self.edge(edge).is_none() {
+            let mut when = Scheduled::soon(now);
+            when.minute = 0;
+            if edge == Edge::From {
+                when.hour = 0;
+            } else {
+                when.hour = 23;
+                when.minute = 59;
+            }
+            *self.edge_mut(edge) = Some(when);
         }
     }
 
     pub fn as_filter(&self) -> HistoryFilter {
         HistoryFilter {
             search: self.search.buffer.text.clone(),
-            from: parse_day_start(&self.from.buffer.text),
-            to: parse_day_end(&self.to.buffer.text),
+            from: self.from.map(|when| when.seconds()),
+            to: self.to.map(|when| when.seconds()),
             accounts: self.accounts.clone(),
         }
     }
@@ -682,8 +709,9 @@ impl Filters {
 
     pub fn clear(&mut self) {
         self.search.buffer = TextBuffer::new("");
-        self.from.buffer = TextBuffer::new("");
-        self.to.buffer = TextBuffer::new("");
+        self.from = None;
+        self.to = None;
+        self.open = None;
         self.accounts.clear();
     }
 
@@ -711,6 +739,7 @@ pub struct Youtube {
     pub volume_open: bool,
     pub volume_bar: (f32, f32),
     pub should_close: bool,
+    pub dismissed: bool,
 
     pub running: Vec<Running>,
 
@@ -761,6 +790,7 @@ impl Default for Youtube {
             volume_open: false,
             volume_bar: (0.0, 0.0),
             should_close: false,
+            dismissed: false,
             running: Vec::new(),
             session: Vec::new(),
             published: None,
@@ -1038,34 +1068,20 @@ mod tests {
     }
 
     #[test]
-    fn a_history_date_filter_accepts_a_plain_calendar_day() {
-        assert_eq!(parse_day_start("1970-01-01"), Some(0));
-        assert_eq!(parse_day_end("1970-01-01"), Some(86_399));
-        assert_eq!(parse_day_start("2023-11-14"), Some(1_699_920_000));
-        assert_eq!(parse_day_start("2000-02-29"), Some(951_782_400));
-        assert_eq!(parse_day_start("  2023-11-14  "), Some(1_699_920_000));
-    }
-
-    #[test]
-    fn a_date_the_user_is_still_typing_does_not_filter_anything_out() {
-        for text in [
-            "",
-            "2023",
-            "2023-1",
-            "2023-11-1",
-            "not a date",
-            "2023-13-01",
-        ] {
-            assert_eq!(parse_day_start(text), None, "{text}");
-        }
-    }
-
-    #[test]
-    fn the_parsed_day_round_trips_against_the_crates_own_date_formatter() {
-        for day in ["1970-01-01", "2023-11-14", "2026-08-14", "2000-02-29"] {
-            let seconds = parse_day_start(day).expect(day);
-            assert_eq!(youtube::iso_date(seconds), day);
-            assert_eq!(youtube::iso_date(parse_day_end(day).expect(day)), day);
+    fn a_moment_on_the_calendar_maps_onto_the_same_second_the_crate_would_name() {
+        assert_eq!(unix_from_civil(1970, 1, 1, 0, 0), 0);
+        assert_eq!(unix_from_civil(1970, 1, 1, 0, 1), 60);
+        assert_eq!(unix_from_civil(2023, 11, 14, 0, 0), 1_699_920_000);
+        assert_eq!(unix_from_civil(2000, 2, 29, 12, 30), 951_782_400 + 45_000);
+        for day in ["1970-01-01", "2001-09-09", "2024-02-29"] {
+            let mut parts = day.split('-');
+            let year: i32 = parts.next().unwrap().parse().unwrap();
+            let month: u32 = parts.next().unwrap().parse().unwrap();
+            let date: u32 = parts.next().unwrap().parse().unwrap();
+            assert_eq!(
+                youtube::iso_date(unix_from_civil(year, month, date, 13, 45)),
+                day
+            );
         }
     }
 
@@ -1230,8 +1246,6 @@ mod tests {
             "youtube.signIn.waiting",
             "youtube.signIn.waitingHint",
             "youtube.signIn.working",
-            "youtube.signIn.privacy.title",
-            "youtube.signIn.privacy.body",
             "youtube.signIn.installChrome",
             "youtube.signIn.getChrome",
             "youtube.accounts.added",
@@ -1382,9 +1396,10 @@ mod tests {
 
     #[test]
     fn the_progress_label_interpolates_a_whole_percentage() {
-        let mut job = UploadJob::default();
-        job.stage = Stage::Uploading;
-        job.percent = 51;
+        let job = UploadJob {
+            stage: Stage::Uploading,
+            percent: 51,
+        };
         let label = stage_label(job.stage, fraction_of(job.percent));
         assert!(label.contains("51"), "{label}");
         assert!(!label.contains('{'), "{label}");

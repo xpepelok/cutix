@@ -8,7 +8,6 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
 ];
 pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt"];
 pub const LUT_EXTENSIONS: &[&str] = &["cube"];
-pub const TEMPLATE_EXTENSIONS: &[&str] = &["json"];
 pub const CAPCUT_EXTENSIONS: &[&str] = &["json"];
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4"];
 pub const PROJECT_EXTENSIONS: &[&str] = &[cutix_export::PACKAGE_EXTENSION];
@@ -17,7 +16,6 @@ pub enum Filter {
     Media,
     Subtitles,
     Lut,
-    Template,
     CapCut,
     Video,
     Project,
@@ -29,7 +27,6 @@ impl Filter {
             Filter::Media => MEDIA_EXTENSIONS,
             Filter::Subtitles => SUBTITLE_EXTENSIONS,
             Filter::Lut => LUT_EXTENSIONS,
-            Filter::Template => TEMPLATE_EXTENSIONS,
             Filter::CapCut => CAPCUT_EXTENSIONS,
             Filter::Video => VIDEO_EXTENSIONS,
             Filter::Project => PROJECT_EXTENSIONS,
@@ -41,7 +38,6 @@ impl Filter {
             Filter::Media => t("dialog.filter.media"),
             Filter::Subtitles => t("dialog.filter.subtitles"),
             Filter::Lut => t("dialog.filter.lut"),
-            Filter::Template => t("dialog.filter.template"),
             Filter::CapCut => t("dialog.filter.capcut"),
             Filter::Video => t("dialog.filter.video"),
             Filter::Project => t("dialog.filter.project"),

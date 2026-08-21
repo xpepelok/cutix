@@ -5,7 +5,7 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUST_ROOTS = [os.path.join(ROOT, "rust", "crates"), os.path.join(ROOT, "apps", "native", "src")]
+RUST_ROOTS = [os.path.join(ROOT, "crates"), os.path.join(ROOT, "apps", "native", "src")]
 
 ITEM = re.compile(
     r"^(?P<indent>\s*)(?P<vis>pub(?:\([^)]*\))?\s+)?"
@@ -26,8 +26,8 @@ def rust_files():
 
 def crate_of(path):
     rel = os.path.relpath(path, ROOT).replace("\\", "/")
-    if rel.startswith("rust/crates/"):
-        return rel.split("/")[2]
+    if rel.startswith("crates/"):
+        return rel.split("/")[1]
     if rel.startswith("apps/native/src"):
         return "cutix"
     return "?"

@@ -35,16 +35,9 @@ pub enum Effect {
 }
 
 impl Effect {
-    pub fn is_neutral(&self) -> bool {
-        match self {
-            Effect::Equalizer { gains_db } => gains_db.iter().all(|gain| gain.abs() < 1e-3),
-            Effect::Pitch { semitones, formant } => semitones.abs() < 1e-3 && formant.abs() < 1e-3,
-            Effect::Reverb { wet, .. } => *wet <= 0.0,
-            Effect::Voice { .. } => false,
-            Effect::Denoise { strength } => *strength <= 0.0,
-        }
-    }
-
+    /// Only the tests in this file ask this; compiled for them alone so the shipping
+    /// binary does not carry a method nothing calls.
+    #[cfg(test)]
     pub fn tail_seconds(&self, sample_rate: u32) -> f64 {
         match self {
             Effect::Reverb { preset, wet } => {
@@ -56,6 +49,16 @@ impl Effect {
                 dsp::reverb_tail_seconds(&options) as f64
             }
             _ => 0.0,
+        }
+    }
+
+    pub fn is_neutral(&self) -> bool {
+        match self {
+            Effect::Equalizer { gains_db } => gains_db.iter().all(|gain| gain.abs() < 1e-3),
+            Effect::Pitch { semitones, formant } => semitones.abs() < 1e-3 && formant.abs() < 1e-3,
+            Effect::Reverb { wet, .. } => *wet <= 0.0,
+            Effect::Voice { .. } => false,
+            Effect::Denoise { strength } => *strength <= 0.0,
         }
     }
 }
@@ -264,7 +267,7 @@ pub fn clip_ticks_at_source_ticks(source_ticks: i64, retime: Option<&RetimeConfi
     let seconds = (low + high) / 2.0;
     seconds
         .is_finite()
-        .then(|| seconds * TICKS_PER_SECOND as f64)
+        .then_some(seconds * TICKS_PER_SECOND as f64)
 }
 
 fn to_clip_ticks(source_seconds: f64, window: &ClipWindow) -> Option<f64> {
@@ -754,11 +757,11 @@ mod tests {
     fn silence_removal_finds_a_constructed_gap() {
         let sample_rate = 48_000u32;
         let mut samples = vec![0.0f32; sample_rate as usize * 4];
-        for index in 0..samples.len() {
+        for (index, sample) in samples.iter_mut().enumerate() {
             let in_gap = index >= sample_rate as usize && index < sample_rate as usize * 2;
             if !in_gap {
                 let phase = std::f32::consts::TAU * 440.0 * index as f32 / sample_rate as f32;
-                samples[index] = phase.sin() * 0.5;
+                *sample = phase.sin() * 0.5;
             }
         }
         let clip = window(0.0, 4.0, 0.0, None);

@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 use cutix_i18n::{t, t_args};
 use cutix_playback::{
     mix, AudioCache, AudioOutput, ElementRect, MixRequest, PlaybackController, PlaybackError,
-    StoreResolver,
+    PlaybackGeneration, StoreResolver,
 };
 use cutix_project::model::MediaAssetData;
 use cutix_project::{MediaStore, Project, ProjectStore};
 use gpui::RenderImage;
-use time::{FrameRate, MediaTime};
+use time::{FrameDuration, FrameRate, MediaTime};
 
 fn describe_playback_error(error: &PlaybackError, media_assets: &[MediaAssetData]) -> String {
     let PlaybackError::MediaNotFound(id) = error else {
@@ -29,8 +29,8 @@ const AV_SYNC_MAX_DRIFT_TICKS: i64 = time::TICKS_PER_SECOND * 2;
 
 const AUDIO_STALL_TIMEOUT: Duration = Duration::from_millis(300);
 
-const AUDIO_CHUNK_SECONDS: f64 = 0.05;
-const AUDIO_LEAD_SECONDS: f64 = 0.25;
+const AUDIO_CHUNK_SECONDS: f64 = 0.2;
+const AUDIO_LEAD_SECONDS: f64 = 1.0;
 const FPS_WINDOW: Duration = Duration::from_millis(500);
 
 enum AudioCommand {
@@ -46,6 +46,7 @@ enum AudioCommand {
 struct AudioClock {
     active: AtomicBool,
     ticks: AtomicU64,
+    starved: AtomicU64,
 }
 
 impl AudioClock {
@@ -56,6 +57,14 @@ impl AudioClock {
 
     fn silence(&self) {
         self.active.store(false, Ordering::Release);
+    }
+
+    fn note_starvation(&self, count: u64) {
+        self.starved.store(count, Ordering::Relaxed);
+    }
+
+    fn starvations(&self) -> u64 {
+        self.starved.load(Ordering::Relaxed)
     }
 
     fn read(&self) -> Option<MediaTime> {
@@ -131,7 +140,9 @@ impl AudioBridge {
                         }
                         Ok(AudioCommand::Pause) => {
                             output.pause();
+                            output.seek();
                             playing = false;
+                            delivered = 0;
                             worker_clock.silence();
                         }
                         Ok(AudioCommand::Volume(level)) => output.set_volume(level),
@@ -147,6 +158,7 @@ impl AudioBridge {
                         continue;
                     }
 
+                    worker_clock.note_starvation(output.starved_callbacks());
                     let consumed = output.consumed_samples();
                     if consumed != delivered {
                         delivered = consumed;
@@ -210,6 +222,10 @@ impl AudioBridge {
         self.clock.read()
     }
 
+    fn starvations(&self) -> u64 {
+        self.clock.starvations()
+    }
+
     fn warning(&self) -> Option<String> {
         self.warning
             .lock()
@@ -231,6 +247,19 @@ fn store_warning(slot: &Arc<Mutex<Option<String>>>, message: String) {
     }
 }
 
+/// Everything about a running frame stream that, if it changes, makes the stream wrong.
+///
+/// Comparing the whole key each tick is what ties the preview to the controller's
+/// cancellation contract: a seek, a project swap or an audio clock correction advances the
+/// generation, the key stops matching, and the stream is rebuilt from the corrected clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamKey {
+    width: u32,
+    height: u32,
+    frame: FrameDuration,
+    generation: PlaybackGeneration,
+}
+
 pub struct PreviewEngine {
     controller: Option<PlaybackController>,
     audio: Option<AudioBridge>,
@@ -246,6 +275,13 @@ pub struct PreviewEngine {
     pending: bool,
 
     requested: Option<(i64, u32, u32)>,
+    /// The stream currently running, keyed by everything that would invalidate it: the
+    /// output size, the frame duration and the playback generation it was started in.
+    /// When the controller advances its generation — a seek, a project swap, an audio
+    /// clock correction — this no longer matches and the stream is restarted from the
+    /// corrected clock position.
+    streaming: Option<StreamKey>,
+    audio_starvations: std::cell::Cell<u64>,
     volume: f32,
     muted: bool,
     presented: u32,
@@ -279,6 +315,8 @@ impl Default for PreviewEngine {
             error: None,
             pending: false,
             requested: None,
+            streaming: None,
+            audio_starvations: std::cell::Cell::new(0),
             volume: 1.0,
             muted: false,
             presented: 0,
@@ -434,6 +472,7 @@ impl PreviewEngine {
             return;
         };
         controller.play();
+        self.streaming = None;
         self.presented = 0;
         self.window_started = Instant::now();
         if let Some(audio) = self.audio.as_ref() {
@@ -448,6 +487,7 @@ impl PreviewEngine {
         if let Some(audio) = self.audio.as_ref() {
             audio.send(AudioCommand::Pause);
         }
+        self.streaming = None;
         self.frames_per_second = 0.0;
     }
 
@@ -464,6 +504,8 @@ impl PreviewEngine {
         let Some(controller) = self.controller.as_ref() else {
             return;
         };
+        // Seeking ends the controller's current generation, which drops every queued and
+        // in-flight frame composed for the old playhead position.
         controller.seek(time);
         if let Some(audio) = self.audio.as_ref() {
             audio.send(if controller.is_playing() {
@@ -474,6 +516,7 @@ impl PreviewEngine {
         }
         self.pending = false;
         self.requested = None;
+        self.streaming = None;
     }
 
     pub fn take_thumbnail(&mut self) -> Option<Thumbnail> {
@@ -481,41 +524,46 @@ impl PreviewEngine {
     }
 
     pub fn tick(&mut self, width: u32, height: u32, rate: FrameRate) -> Option<Arc<RenderImage>> {
-        let Some(controller) = self.controller.as_ref() else {
-            return None;
-        };
+        let controller = self.controller.as_ref()?;
         if let Some(error) = controller.take_error() {
             self.error = Some(error);
         }
         self.reconcile_audio_clock(controller);
 
+        // Every valid rate has an exact frame duration. A rate that has none is not a
+        // rate at all, and there is no honest frame length to substitute for it, so the
+        // preview holds its last picture rather than racing through the timeline.
+        let frame = rate.frame_duration()?;
         let playing = controller.is_playing();
-        let ticks_per_frame = rate.ticks_per_frame().unwrap_or(1).max(1);
         let clock = controller.current_time();
-        let clock_frame = clock.as_ticks().div_euclid(ticks_per_frame);
+        let clock_frame = frame.frame_floor(clock.as_ticks()).unwrap_or(0);
+        let frame_time = MediaTime::from_frame(clock_frame, rate).unwrap_or(MediaTime::ZERO);
         let slot = controller.latest_frame();
-        let waiting = slot.as_ref().is_some_and(|slot| {
-            slot.revision != self.image_revision && playing && slot.time > clock
-        });
 
-        if !waiting {
-            let ahead = if playing { 1 } else { 0 };
-            let request = (clock_frame + ahead, width.max(1), height.max(1));
+        if playing {
+            let wanted = StreamKey {
+                width: width.max(1),
+                height: height.max(1),
+                frame,
+                generation: controller.generation(),
+            };
+            if self.streaming != Some(wanted) {
+                controller.stream_from(frame_time, wanted.width, wanted.height, frame);
+                self.streaming = Some(wanted);
+                self.requested = None;
+                self.pending = true;
+            }
+        } else {
+            self.streaming = None;
+            let request = (clock_frame, width.max(1), height.max(1));
             if self.requested != Some(request) {
-                controller.request_frame(
-                    MediaTime::from_ticks(request.0 * ticks_per_frame),
-                    request.1,
-                    request.2,
-                );
+                controller.request_frame(frame_time, request.1, request.2);
                 self.requested = Some(request);
                 self.pending = true;
             }
         }
 
         let slot = slot?;
-        if playing && slot.time > clock && self.image.is_some() {
-            return None;
-        }
         if self.image.is_some() && slot.revision == self.image_revision {
             return None;
         }
@@ -556,14 +604,29 @@ impl PreviewEngine {
         if !controller.is_playing() {
             return;
         }
-        let Some(audio) = self.audio.as_ref().and_then(AudioBridge::position) else {
+        let Some(bridge) = self.audio.as_ref() else {
+            return;
+        };
+        let starvations = bridge.starvations();
+        let starved = starvations != self.audio_starvations.get();
+        self.audio_starvations.set(starvations);
+        if starved {
+            return;
+        }
+        let Some(audio) = bridge.position() else {
             return;
         };
         let drift = audio.as_ticks() - controller.current_time().as_ticks();
         if drift.abs() < AV_SYNC_TOLERANCE_TICKS || drift.abs() > AV_SYNC_MAX_DRIFT_TICKS {
             return;
         }
-        controller.seek(audio);
+        // Corrected through `retime`, not `seek`: the queued frames carry their own
+        // timeline times and stay valid across a clock correction, and the stream key in
+        // `tick` keeps matching so the stream runs on. Correcting through `seek` would
+        // discard the pipeline every time the clock drifted, and drift past the tolerance
+        // is the normal state of an audio device running a second of lead — the picture
+        // would sit still while the sound played on.
+        controller.retime(audio);
     }
 }
 
@@ -688,6 +751,7 @@ mod tests {
             ephemeral: false,
             thumbnail_url: None,
             file_name: None,
+            source_path: None,
         }
     }
 

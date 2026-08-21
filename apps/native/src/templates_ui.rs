@@ -3,29 +3,25 @@ use std::path::{Path, PathBuf};
 use cutix_i18n::t;
 use template::TemplateManifest;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TemplateSource {
-    Builtin,
-    User,
-}
-
 #[derive(Clone, Debug)]
 pub struct TemplateEntry {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub source: TemplateSource,
     pub path: Option<PathBuf>,
     pub manifest: TemplateManifest,
 }
 
 impl TemplateEntry {
-    pub fn slot_count(&self) -> usize {
-        self.manifest.slots.len()
-    }
-
+    /// Only the tests in this file ask for this; compiled for them alone so the
+    /// shipping binary does not carry a method nothing calls.
+    #[cfg(test)]
     pub fn has_timeline(&self) -> bool {
         cutix_project::template_project::parse_scenes(&self.manifest.scenes).is_some()
+    }
+
+    pub fn slot_count(&self) -> usize {
+        self.manifest.slots.len()
     }
 }
 
@@ -74,7 +70,6 @@ pub fn builtin_entries() -> Vec<TemplateEntry> {
                     &format!("templates.builtin.{key}.description"),
                     &manifest.description,
                 ),
-                source: TemplateSource::Builtin,
                 path: None,
                 manifest,
             }
@@ -102,13 +97,12 @@ pub fn user_entries() -> Vec<TemplateEntry> {
                 id: format!("user:{}", path.file_stem()?.to_string_lossy()),
                 name: manifest.name.clone(),
                 description: manifest.description.clone(),
-                source: TemplateSource::User,
                 path: Some(path),
                 manifest,
             })
         })
         .collect();
-    templates.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    templates.sort_by_key(|left| left.name.to_lowercase());
     templates
 }
 
