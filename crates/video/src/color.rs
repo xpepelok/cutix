@@ -113,7 +113,7 @@ pub fn i420_to_rgba(
             let green_shift = vg * red + ug * blue;
             let blue_shift = ub * blue;
 
-            for (pixel, sample) in pair.chunks_exact_mut(4).zip(samples) {
+            for (pixel, sample) in pair.as_chunks_mut::<4>().0.iter_mut().zip(samples) {
                 let base = (i32::from(*sample) - offset) * luma;
                 pixel[0] = clamp_fixed(base + red_shift);
                 pixel[1] = clamp_fixed(base + green_shift);
@@ -140,7 +140,7 @@ pub fn rgba_to_i420(
     for row in 0..height {
         let source = &rgba[row * width * 4..row * width * 4 + width * 4];
         let target = &mut y_plane[row * width..row * width + width];
-        for (slot, pixel) in target.iter_mut().zip(source.chunks_exact(4)) {
+        for (slot, pixel) in target.iter_mut().zip(source.as_chunks::<4>().0) {
             let r = i32::from(pixel[0]);
             let g = i32::from(pixel[1]);
             let b = i32::from(pixel[2]);

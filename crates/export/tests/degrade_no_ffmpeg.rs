@@ -191,7 +191,9 @@ fn video_export_still_works_and_audio_lands_beside_it() {
     );
 
     let peak = bytes[44..]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| i16::from_le_bytes([pair[0], pair[1]]).unsigned_abs())
         .max()
         .unwrap_or(0);

@@ -175,8 +175,10 @@ fn an_exported_mp4_decodes_back_to_the_frames_the_composer_produced() {
         let mut large = 0u64;
         for (actual, wanted) in decoded
             .rgba
-            .chunks_exact(4)
-            .zip(expected.pixels.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(expected.pixels.as_chunks::<4>().0)
         {
             for channel in 0..3 {
                 let delta = (actual[channel] as i32 - wanted[channel] as i32).unsigned_abs();

@@ -342,7 +342,7 @@ pub fn decode_avatar(bytes: &[u8]) -> Option<Arc<gpui::RenderImage>> {
     let rgba = decoded.to_rgba8();
     let (width, height) = (rgba.width(), rgba.height());
     let mut bgra = rgba.into_raw();
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let buffer = image::ImageBuffer::from_raw(width, height, bgra)?;

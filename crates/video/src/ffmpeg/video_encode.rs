@@ -267,7 +267,9 @@ impl H264Encoder {
             self.interleaved.resize(chroma_width * chroma_height * 2, 0);
             for (pair, (blue, red)) in self
                 .interleaved
-                .chunks_exact_mut(2)
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
                 .zip(u.iter().zip(v.iter()))
             {
                 pair[0] = *blue;

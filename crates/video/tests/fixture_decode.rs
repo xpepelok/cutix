@@ -3,7 +3,9 @@ use video::{VideoStream, first_frame, probe};
 fn mean_luma(frame: &video::Frame) -> f64 {
     let sum: u64 = frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| (pixel[0] as u64 + pixel[1] as u64 + pixel[2] as u64) / 3)
         .sum();
     sum as f64 / (frame.width * frame.height).max(1) as f64

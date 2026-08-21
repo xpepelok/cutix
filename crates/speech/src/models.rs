@@ -308,7 +308,9 @@ pub fn parse_style_matrix(
         .chunks_exact(stride)
         .map(|frame| {
             frame
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|value| f32::from_le_bytes([value[0], value[1], value[2], value[3]]))
                 .collect()
         })

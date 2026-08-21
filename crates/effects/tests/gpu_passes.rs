@@ -116,7 +116,7 @@ fn to_native(rgba: &[u8], format: wgpu::TextureFormat) -> Vec<u8> {
         return rgba.to_vec();
     }
     let mut out = rgba.to_vec();
-    for pixel in out.chunks_exact_mut(4) {
+    for pixel in out.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     out
@@ -169,7 +169,9 @@ fn s_curve_table() -> Vec<f32> {
 
 fn channel_stats(pixels: &[u8], channel: usize) -> (f64, f64) {
     let values: Vec<f64> = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| pixel[channel] as f64)
         .collect();
     let mean = values.iter().sum::<f64>() / values.len() as f64;

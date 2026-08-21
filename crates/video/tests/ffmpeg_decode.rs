@@ -41,7 +41,9 @@ macro_rules! ffmpeg_or_skip {
 fn mean_luma(frame: &Frame) -> f64 {
     let sum: u64 = frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| (u64::from(pixel[0]) + u64::from(pixel[1]) + u64::from(pixel[2])) / 3)
         .sum();
     sum as f64 / (frame.width * frame.height).max(1) as f64
@@ -59,7 +61,9 @@ fn is_plausible_picture(frame: &Frame) {
 
     let distinct = frame
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .step_by(37)
         .map(|pixel| [pixel[0], pixel[1], pixel[2]])
         .collect::<std::collections::HashSet<_>>()
@@ -657,7 +661,11 @@ fn a_mid_stream_resolution_change_is_decoded_without_reusing_a_stale_scaler() {
         );
         let bottom = &frame.rgba[frame.rgba.len() - frame.width * 4..];
         assert!(
-            bottom.chunks_exact(4).any(|pixel| pixel[0..3] != [0, 0, 0]),
+            bottom
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[0..3] != [0, 0, 0]),
             "the last row at {seconds:.1}s ({}x{}) is entirely black, which is what a scaler \
              built for the previous resolution leaves behind",
             frame.width,

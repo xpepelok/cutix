@@ -442,7 +442,7 @@ fn a_composed_frame_is_written_as_a_readable_png_thumbnail() {
 
     let (width, height) = (1920u32, 1080u32);
     let mut rgba = vec![0u8; (width as usize) * (height as usize) * 4];
-    for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         pixel[0] = (index % 256) as u8;
         pixel[1] = 64;
         pixel[2] = 200;

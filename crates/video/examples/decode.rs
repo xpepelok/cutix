@@ -23,7 +23,9 @@ fn main() {
             let pixels = frame.width * frame.height;
             let mean: u64 = frame
                 .rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|pixel| (pixel[0] as u64 + pixel[1] as u64 + pixel[2] as u64) / 3)
                 .sum::<u64>()
                 / pixels.max(1) as u64;

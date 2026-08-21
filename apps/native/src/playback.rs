@@ -81,6 +81,10 @@ struct AudioBridge {
     commands: Sender<AudioCommand>,
     warning: Arc<Mutex<Option<String>>>,
     clock: Arc<AudioClock>,
+    /// Held so the bridge can wait for the worker in `Drop`. A detached worker outlives
+    /// the bridge that owns it and keeps touching the audio device while the process is
+    /// being torn down, which on Windows ends the process rather than the thread.
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl AudioBridge {
@@ -96,7 +100,7 @@ impl AudioBridge {
         let clock: Arc<AudioClock> = Arc::new(AudioClock::default());
         let worker_clock = Arc::clone(&clock);
 
-        std::thread::Builder::new()
+        let worker = std::thread::Builder::new()
             .name("cutix-preview-audio".into())
             .spawn(move || {
                 let output = match AudioOutput::open() {
@@ -211,6 +215,7 @@ impl AudioBridge {
             commands,
             warning,
             clock,
+            worker: Some(worker),
         })
     }
 
@@ -237,6 +242,12 @@ impl AudioBridge {
 impl Drop for AudioBridge {
     fn drop(&mut self) {
         let _ = self.commands.send(AudioCommand::Stop);
+        // Waited for, not just asked to stop. Swapping projects drops one bridge and
+        // spawns the next, so without this the old worker is still holding the output
+        // device when the new one opens it, and still running when the process exits.
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -668,7 +679,7 @@ fn to_render_image(width: u32, height: u32, rgba: &[u8]) -> Option<Arc<RenderIma
         return None;
     }
     let mut bgra = rgba[..expected].to_vec();
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let buffer = image::ImageBuffer::from_raw(width, height, bgra)?;

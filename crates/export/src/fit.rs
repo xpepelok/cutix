@@ -102,7 +102,7 @@ pub struct RgbaFrameMut<'pixels> {
 /// A source that would overhang the target is clipped rather than wrapping onto the next
 /// row.
 pub fn blit_centre(source: RgbaFrame<'_>, target: RgbaFrameMut<'_>, offset_x: u32, offset_y: u32) {
-    for pixel in target.pixels.chunks_exact_mut(4) {
+    for pixel in target.pixels.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&[0, 0, 0, 255]);
     }
     let copy_width = source.width.min(target.width.saturating_sub(offset_x));

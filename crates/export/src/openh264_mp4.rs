@@ -124,7 +124,13 @@ impl EncoderBackend for OpenH264Mp4Backend {
             )));
         }
 
-        for (target, source) in self.rgb.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
+        for (target, source) in self
+            .rgb
+            .as_chunks_mut::<3>()
+            .0
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0)
+        {
             target.copy_from_slice(&source[..3]);
         }
         self.yuv.read_rgb8(RgbSliceU8::new(

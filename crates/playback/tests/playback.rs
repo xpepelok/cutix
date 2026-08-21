@@ -272,7 +272,7 @@ fn composes_a_known_project_frame() {
             "centre pixel drifted: {composed_center:?} vs {source_center:?}"
         );
     }
-    for pixel in frame.pixels.chunks_exact(4) {
+    for pixel in frame.pixels.as_chunks::<4>().0 {
         assert_eq!(pixel[3], 255);
     }
 
@@ -1124,7 +1124,9 @@ fn a_text_element_paints_instead_of_being_skipped() {
     );
     let lit = frame
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 180 && pixel[1] > 180 && pixel[2] > 180)
         .count();
     assert!(lit > 100, "{lit} lit pixels");

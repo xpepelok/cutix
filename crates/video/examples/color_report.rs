@@ -32,7 +32,7 @@ fn main() {
     for (label, frame) in [("before (full-range BT.601)", &old), ("after", &new)] {
         let mut histogram = [0u64; 256];
         let mut darkest = 255u8;
-        for pixel in frame.rgba.chunks_exact(4) {
+        for pixel in frame.rgba.as_chunks::<4>().0 {
             let luma = pixel[0].min(pixel[1]).min(pixel[2]);
             histogram[luma as usize] += 1;
             darkest = darkest.min(luma);
@@ -56,7 +56,13 @@ fn main() {
 
     let mut total = 0u64;
     let mut count = 0u64;
-    for (a, b) in old.rgba.chunks_exact(4).zip(new.rgba.chunks_exact(4)) {
+    for (a, b) in old
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(new.rgba.as_chunks::<4>().0)
+    {
         for channel in 0..3 {
             total += (a[channel] as i32 - b[channel] as i32).unsigned_abs() as u64;
             count += 1;

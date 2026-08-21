@@ -1169,7 +1169,7 @@ impl FrameComposer {
         let data: &[u8] = if format == wgpu::TextureFormat::Bgra8Unorm {
             self.scratch.upload.clear();
             self.scratch.upload.extend_from_slice(&frame.rgba);
-            for pixel in self.scratch.upload.chunks_exact_mut(4) {
+            for pixel in self.scratch.upload.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
             &self.scratch.upload
@@ -1278,7 +1278,7 @@ impl FrameComposer {
         buffer.unmap();
 
         if swap {
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }

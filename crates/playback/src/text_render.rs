@@ -293,7 +293,9 @@ impl TextRasterizer {
                 let coverage = if stride >= width * 4 {
                     image
                         .data
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|pixel| pixel[3])
                         .collect::<Vec<u8>>()
                 } else {
@@ -988,7 +990,9 @@ mod tests {
         assert!(layer.width > 10 && layer.height > 10);
         let opaque = layer
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[3] > 200)
             .count();
         assert!(opaque > 50, "{opaque} opaque pixels");
@@ -1015,7 +1019,9 @@ mod tests {
             .expect("layer");
         let red = layer
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[0] > 200 && pixel[1] < 40 && pixel[3] > 200)
             .count();
         assert!(red > 100, "{red} background pixels");
@@ -1035,7 +1041,9 @@ mod tests {
     fn ink(layer: &TextLayer) -> usize {
         layer
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[3] > 8)
             .count()
     }
@@ -1104,7 +1112,9 @@ mod tests {
             .expect("mid");
         let partial = mid
             .rgba
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| pixel[3] > 8 && pixel[3] < 240)
             .count();
         assert!(partial > 20, "{partial} partially transparent pixels");
