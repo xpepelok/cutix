@@ -340,6 +340,14 @@ impl Default for PreviewEngine {
 }
 
 impl PreviewEngine {
+    /// Starts the preview for `project` and hands back the image the previous one left on
+    /// screen, for the caller to release through its context.
+    ///
+    /// Acquires nothing under test. Opening a preview builds a GPU device and an audio
+    /// output from whatever thread the harness happens to be on, and the tests that reach
+    /// this — opening a project, switching between two — are about the document and its
+    /// autosave rather than about the picture. Skipping it leaves the engine reporting
+    /// itself closed, which is what a machine with neither device reports anyway.
     pub fn open(
         &mut self,
         project: &Project,
@@ -353,25 +361,29 @@ impl PreviewEngine {
         self.thumbnail = None;
         self.thumbnail_taken = None;
 
-        match PlaybackController::new(
-            Arc::clone(&document),
-            scene_id.clone(),
-            Box::new(StoreResolver::new(MediaStore::for_project(
-                store,
-                &project.metadata.id,
-            ))),
-            Some(store.project_directory(&project.metadata.id)),
-        ) {
-            Ok(controller) => {
-                self.controller = Some(controller);
-                self.error = None;
+        // Released before the replacements are acquired. Assigning over the fields builds
+        // the new worker first, which leaves the old one holding a GPU device and the
+        // audio output while the new one asks for both.
+        self.controller = None;
+        self.audio = None;
+        self.error = None;
+
+        if !cfg!(test) {
+            match PlaybackController::new(
+                Arc::clone(&document),
+                scene_id.clone(),
+                Box::new(StoreResolver::new(MediaStore::for_project(
+                    store,
+                    &project.metadata.id,
+                ))),
+                Some(store.project_directory(&project.metadata.id)),
+            ) {
+                Ok(controller) => self.controller = Some(controller),
+                Err(error) => self.error = Some(describe_playback_error(&error, media_assets)),
             }
-            Err(error) => {
-                self.controller = None;
-                self.error = Some(describe_playback_error(&error, media_assets));
-            }
+            self.audio =
+                AudioBridge::spawn(document, scene_id.clone(), media, self.effective_volume());
         }
-        self.audio = AudioBridge::spawn(document, scene_id.clone(), media, self.effective_volume());
         self.scene_id = scene_id;
         self.image_time = MediaTime::ZERO;
         self.pending = false;
