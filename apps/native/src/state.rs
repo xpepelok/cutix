@@ -232,6 +232,8 @@ pub struct AppModel {
     pub media_root: Option<PathBuf>,
     pub importing: usize,
     pub pending_import: Vec<PathBuf>,
+    pub pending_on_timeline: bool,
+    pub editor_origin: Route,
     pub notice: Option<String>,
     pub selection: Vec<String>,
 
@@ -283,6 +285,13 @@ pub enum WaveformState {
 }
 
 impl AppModel {
+    /// Only the tests in this file ask this; compiled for them alone so the shipping
+    /// binary does not carry a method nothing calls.
+    #[cfg(test)]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     pub fn new(store: ProjectStore, dark: bool) -> Self {
         Self {
             theme: if dark { Theme::dark() } else { Theme::light() },
@@ -296,6 +305,8 @@ impl AppModel {
             media_root: None,
             importing: 0,
             pending_import: Vec::new(),
+            pending_on_timeline: false,
+            editor_origin: Route::Projects,
             notice: None,
             selection: Vec::new(),
             tracking_region: crate::tracking::TrackingRegion::default(),
@@ -332,10 +343,6 @@ impl AppModel {
             pending_epoch: 0,
             debounce_token: 0,
         }
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        self.dirty
     }
 
     pub fn is_open(&self, id: &str) -> bool {
@@ -501,6 +508,7 @@ impl AppModel {
                     let id = project.metadata.id.clone();
                     this.refresh_projects(cx);
                     this.pending_import = vec![path];
+                    this.pending_on_timeline = true;
                     this.open_project(&id, cx);
                 }
                 Err(error) => {
@@ -538,6 +546,11 @@ impl AppModel {
 
     pub fn open_project(&mut self, id: &str, cx: &mut Context<Self>) {
         self.save_now();
+        self.editor_origin = if self.route == Route::Library {
+            Route::Library
+        } else {
+            Route::Projects
+        };
         let store = self.store.clone();
         let id = id.to_string();
         cx.spawn(async move |this, cx| {
@@ -568,12 +581,18 @@ impl AppModel {
                         this.route = Route::Editor;
                         this.start_preview(cx);
                         let waiting = std::mem::take(&mut this.pending_import);
+                        let onto_timeline = std::mem::take(&mut this.pending_on_timeline);
                         if !waiting.is_empty() {
-                            this.import_media(waiting, cx);
+                            if onto_timeline && waiting.len() == 1 {
+                                this.import_media_at_playhead(waiting[0].clone(), cx);
+                            } else {
+                                this.import_media(waiting, cx);
+                            }
                         }
                     }
                     Err(error) => {
                         this.pending_import.clear();
+                        this.pending_on_timeline = false;
                         this.notice = Some(failure("toast.project.notFound", &error));
                     }
                 }
@@ -585,7 +604,7 @@ impl AppModel {
 
     pub fn close_project(&mut self, cx: &mut Context<Self>) {
         self.save_now();
-        self.route = Route::Projects;
+        self.route = self.editor_origin;
         self.project = None;
         self.media.clear();
         self.media_root = None;
@@ -695,7 +714,7 @@ impl AppModel {
                 .background_spawn(async move {
                     let media = MediaStore::for_project(&store, &project_id);
                     let root = media.root().to_path_buf();
-                    (media.import(&path).ok(), file_label(&path), root)
+                    (media.import(&path), file_label(&path), root)
                 })
                 .await;
 
@@ -704,15 +723,19 @@ impl AppModel {
                 this.importing = this.importing.saturating_sub(1);
                 this.media_root = Some(root);
                 match imported {
-                    Some(asset) => {
+                    Ok(asset) => {
+                        let bare = this.timeline_is_empty();
                         this.media.push(asset.clone());
                         this.refresh_missing_media();
                         this.edit(cx, |editor| editor.insert_media(&asset, start, None));
+                        if bare {
+                            this.adopt_media_frame_rate(&asset);
+                        }
                     }
-                    None => {
+                    Err(error) => {
                         this.notice = Some(cutix_i18n::t_args(
-                            "toast.media.processFailed",
-                            &[("file", &label)],
+                            "toast.media.processFailedWhy",
+                            &[("file", &label), ("why", &error.to_string())],
                         ));
                     }
                 }
@@ -752,7 +775,7 @@ impl AppModel {
                     for path in paths {
                         match media.import(&path) {
                             Ok(asset) => imported.push(asset),
-                            Err(_) => failures.push(file_label(&path)),
+                            Err(error) => failures.push((file_label(&path), error.to_string())),
                         }
                     }
                     (imported, failures, media.root().to_path_buf())
@@ -765,10 +788,10 @@ impl AppModel {
                 this.media_root = Some(root);
                 this.media.extend(imported);
                 this.refresh_missing_media();
-                if let Some(name) = failures.first() {
+                if let Some((name, why)) = failures.first() {
                     this.notice = Some(cutix_i18n::t_args(
-                        "toast.media.processFailed",
-                        &[("file", name)],
+                        "toast.media.processFailedWhy",
+                        &[("file", name), ("why", why)],
                     ));
                 }
                 cx.notify();
@@ -955,6 +978,36 @@ impl AppModel {
 
     pub fn is_selected(&self, id: &str) -> bool {
         self.selection.iter().any(|value| value == id)
+    }
+
+    pub fn timeline_is_empty(&self) -> bool {
+        let Some(scene) = self.current_scene() else {
+            return true;
+        };
+        scene.tracks.main.elements().is_empty()
+            && scene
+                .tracks
+                .overlay
+                .iter()
+                .chain(scene.tracks.audio.iter())
+                .all(|track| track.elements().is_empty())
+    }
+
+    pub fn adopt_media_frame_rate(&mut self, asset: &cutix_project::MediaAssetData) {
+        let Some(rate) = asset.fps.and_then(time::FrameRate::nearest) else {
+            return;
+        };
+        let Some(project) = self.project.as_mut() else {
+            return;
+        };
+        // Compared in reduced form: a project saved before frame rates were reduced holds
+        // the same rate written as a different fraction, and adopting it again would mark
+        // the project dirty for no change the user made.
+        if project.settings.fps.reduced() == rate.reduced() {
+            return;
+        }
+        project.settings.fps = rate;
+        self.dirty = true;
     }
 
     pub fn current_scene(&self) -> Option<&Scene> {
@@ -1146,6 +1199,19 @@ impl AppModel {
                 )
             })
             .unwrap_or(crate::theme::DEFAULT_CANVAS_SIZE)
+    }
+
+    pub fn content_duration(&self) -> time::MediaTime {
+        let Some(project) = self.project.as_ref() else {
+            return time::MediaTime::ZERO;
+        };
+        let scene = self.current_scene().map(|scene| scene.id.clone());
+        let measured = cutix_export::scene_duration(project, scene.as_deref());
+        if measured > time::MediaTime::ZERO {
+            measured
+        } else {
+            self.total_duration()
+        }
     }
 
     pub fn total_duration(&self) -> time::MediaTime {

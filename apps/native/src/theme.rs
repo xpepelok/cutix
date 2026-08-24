@@ -208,6 +208,15 @@ pub const TEXT_XS: f32 = 0.72;
 pub const TEXT_SM: f32 = 0.79;
 pub const TEXT_BASE: f32 = 0.92;
 pub const TEXT_LG: f32 = 1.125;
+
+/// The text ladder has to stay in order for a size name to mean anything relative to its
+/// neighbours. That is a property of these constants, so it is checked when they are
+/// compiled rather than when a test happens to run.
+const _: () = {
+    assert!(TEXT_XS < TEXT_SM);
+    assert!(TEXT_SM < TEXT_BASE);
+    assert!(TEXT_BASE < TEXT_LG);
+};
 pub const TEXT_TAB_LABEL: f32 = 0.6875;
 pub const TEXT_PROJECT_NAME: f32 = 0.9;
 
@@ -278,17 +287,17 @@ fn optimal_interval(pixels_per_frame: f32, fps: f32, candidates: &[u32], minimum
 }
 
 fn ensure_tick_divides_label(tick: u32, label: u32, fps: f32) -> u32 {
-    if label % tick == 0 {
+    if label.is_multiple_of(tick) {
         return tick;
     }
     for frames in TICK_FRAME_INTERVALS.iter().filter(|f| **f >= tick) {
-        if label % frames == 0 {
+        if label.is_multiple_of(*frames) {
             return *frames;
         }
     }
     for seconds in SECOND_MULTIPLIERS {
         let frames = (*seconds as f32 * fps).round() as u32;
-        if frames >= tick && frames > 0 && label % frames == 0 {
+        if frames >= tick && frames > 0 && label.is_multiple_of(frames) {
             return frames;
         }
     }

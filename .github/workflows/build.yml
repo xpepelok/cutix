@@ -13,21 +13,103 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  # Every cargo invocation below passes --locked so a build resolves exactly the versions
+  # in Cargo.lock. Without it a transitive release can change what CI tested without any
+  # change to this repository.
 
 jobs:
+  # Cheap gates that need no platform-specific dependencies. Run first so an unformatted
+  # or lint-failing branch fails in under a minute rather than after the full matrix.
+  lint:
+    name: format, lints and docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Rustdoc
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  # The declared minimum toolchain has to keep building, or `rust-version` is a claim
+  # nothing checks.
+  msrv:
+    name: minimum supported toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the workspace MSRV
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - run: cargo check --workspace --all-targets --locked
+
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, windows-11-arm, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
@@ -52,16 +134,77 @@ jobs:
       - name: Fetch ONNX Runtime
         if: runner.os == 'Linux'
         run: |
-          url=https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-x64-1.20.1.tgz
+          case "${{ runner.arch }}" in
+            ARM64) build=onnxruntime-linux-aarch64-1.20.1 ;;
+            *) build=onnxruntime-linux-x64-1.20.1 ;;
+          esac
+          url=https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/$build.tgz
           curl -sSL -o onnxruntime.tgz "$url"
           tar -xzf onnxruntime.tgz
-          echo "ORT_DYLIB_PATH=$PWD/onnxruntime-linux-x64-1.20.1/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+          echo "ORT_DYLIB_PATH=$PWD/$build/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
-      - run: cargo fmt --all -- --check
+      - name: Fetch ONNX Runtime for Windows on ARM
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-win-arm64-1.20.1.zip"
+          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
+          Expand-Archive -Path onnxruntime.zip -DestinationPath ort
+          $dll = (Get-ChildItem -Recurse -Filter onnxruntime.dll ort | Select-Object -First 1).FullName
+          "ORT_DYLIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - run: cargo build -p cutix --release
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
 
-      - run: cargo test --workspace
+      - name: Build the app
+        run: cargo build -p cutix --release --locked
+
+      - name: Unit and integration tests
+        # Single-threaded: several suites open the same GPU adapter and the same audio
+        # device, which they cannot share.
+        run: cargo test --workspace --locked -- --test-threads=1
+
+  # The optional backends are the ones most likely to break silently, because the code
+  # paths that use them are skipped rather than failed when they are absent.
+  features:
+    name: feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Export and playback without FFmpeg
+        # The degrade tests assert that the shipped OpenH264 and sidecar-WAV paths are
+        # taken when FFmpeg is not loadable, which is the configuration most users are in.
+        run: |
+          cargo test -p cutix-export --locked -- --test-threads=1
+          cargo test -p video --locked -- --test-threads=1
+
+      - name: Package import and export
+        run: cargo test -p cutix-export --test package --locked -- --test-threads=1
+
+      - name: Playback lifecycle
+        run: cargo test -p cutix-playback --locked -- --test-threads=1
 
   nix:
     name: nix flake

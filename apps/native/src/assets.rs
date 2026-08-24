@@ -11,6 +11,8 @@ macro_rules! icons {
 const ICONS: &[(&str, &[u8])] = icons![
     "alert-circle",
     "arrow-right-double",
+    "arrow-up",
+    "arrows-vertical",
     "closed-caption",
     "command",
     "copy01",
@@ -95,10 +97,6 @@ pub fn icon(name: &str) -> SharedString {
     SharedString::from(format!("icons/{name}.svg"))
 }
 
-pub fn icon_exists(name: &str) -> bool {
-    ICONS.iter().any(|(known, _)| *known == name)
-}
-
 impl AssetSource for Icons {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if let Some(code) = path
@@ -123,6 +121,13 @@ impl AssetSource for Icons {
         }
         Ok(ICONS.iter().map(|(name, _)| icon(name)).collect())
     }
+}
+
+/// Only the tests in this file ask this; compiled for them alone so the shipping
+/// binary does not carry a function nothing calls.
+#[cfg(test)]
+pub fn icon_exists(name: &str) -> bool {
+    ICONS.iter().any(|(known, _)| *known == name)
 }
 
 #[cfg(test)]

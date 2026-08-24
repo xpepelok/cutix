@@ -35,7 +35,7 @@ pub fn reframe_sample_count(duration_seconds: f64) -> usize {
     } else {
         0
     };
-    planned.min(MAX_REFRAME_SAMPLES).max(2)
+    planned.clamp(2, MAX_REFRAME_SAMPLES)
 }
 
 pub fn smoothing_radius_for(sample_count: usize) -> usize {
@@ -54,7 +54,6 @@ pub struct ReframeCrop {
 #[derive(Clone, Debug, Default)]
 pub struct ReframeAnalysis {
     pub times: Vec<f64>,
-    pub centers: Vec<Point>,
     pub windows: Vec<CropWindow>,
     pub source_width: f32,
     pub source_height: f32,
@@ -207,7 +206,6 @@ pub fn analyze(request: &ReframeRequest, job: &Job) -> Result<ReframeAnalysis, S
 
     Ok(ReframeAnalysis {
         times,
-        centers,
         windows,
         source_width,
         source_height,
@@ -424,7 +422,6 @@ mod tests {
     fn keyframes_are_timed_from_the_element_start() {
         let analysis = ReframeAnalysis {
             times: vec![4.0, 5.0, 6.0],
-            centers: Vec::new(),
             windows: vec![
                 CropWindow {
                     x: 0.0,
@@ -463,7 +460,6 @@ mod tests {
     fn samples_past_the_element_end_are_dropped() {
         let analysis = ReframeAnalysis {
             times: vec![0.0, 9.0],
-            centers: Vec::new(),
             windows: vec![
                 CropWindow {
                     x: 0.0,

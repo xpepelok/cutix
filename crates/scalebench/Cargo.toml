@@ -1,0 +1,22 @@
+[package]
+name = "scalebench"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "scalebench"
+path = "src/main.rs"
+
+[dependencies]
+cutix-project = { version = "0.1.0", path = "../project" }
+cutix-playback = { version = "0.1.0", path = "../playback" }
+fixtures = { version = "0.1.0", path = "../fixtures" }
+time = { version = "0.1.0", path = "../time" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

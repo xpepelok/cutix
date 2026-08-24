@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cutix_export::{
-    backend::AudioSupport, default_backend, ExportPresetId, ExportQuality, ExportRequest, Stage,
+    default_backend, AudioSupport, ExportPresetId, ExportQuality, ExportRequest, Stage,
     EXPORT_PRESETS, EXPORT_QUALITIES, PACKAGE_EXTENSION,
 };
 use cutix_i18n::{t, t_args};
@@ -124,6 +124,7 @@ pub enum ExportStatus {
         bytes: u64,
         frames_per_second: f32,
         outputs: usize,
+        encoder: String,
     },
     Failed(String),
 }
@@ -206,10 +207,6 @@ impl Default for ExportSession {
 impl ExportSession {
     pub fn is_running(&self) -> bool {
         matches!(self.status, ExportStatus::Running { .. })
-    }
-
-    pub fn is_collapsed(&self, section: ExportSection) -> bool {
-        self.collapsed.contains(&section)
     }
 
     pub fn toggle_section(&mut self, section: ExportSection) {
@@ -314,7 +311,7 @@ pub fn export_directory() -> PathBuf {
         return PathBuf::from(directory);
     }
     dirs::video_dir()
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(std::env::temp_dir)
         .join("cutix")
 }
 
@@ -587,6 +584,10 @@ impl AppModel {
 
         if let Some(outcome) = outcome {
             self.export.started_at = None;
+            crate::cues::play(match &outcome {
+                Ok(_) => crate::cues::Cue::Done,
+                Err(_) => crate::cues::Cue::Trouble,
+            });
             self.export.status = match outcome {
                 Ok(RunOutcome::Video(outcome)) => ExportStatus::Done {
                     mode: self.export.mode,
@@ -601,6 +602,7 @@ impl AppModel {
                     bytes: outcome.artifacts.bytes,
                     frames_per_second: outcome.frames_per_second(),
                     outputs,
+                    encoder: outcome.encoder.clone(),
                 },
                 Ok(RunOutcome::Package(outcome)) => ExportStatus::Done {
                     mode: ExportMode::Project,
@@ -611,6 +613,7 @@ impl AppModel {
                     bytes: outcome.bytes,
                     frames_per_second: 0.0,
                     outputs: 1,
+                    encoder: String::new(),
                 },
                 Err(error) => ExportStatus::Failed(error),
             };
@@ -986,12 +989,14 @@ pub fn export_dialog(view: ExportView, cx: &mut Context<crate::shell::Shell>) ->
             stage,
         } => running_body(
             colors,
-            *fraction,
-            *frame,
-            *total,
-            *frames_per_second,
-            *stage,
-            view.phase,
+            RunningProgress {
+                fraction: *fraction,
+                frame: *frame,
+                total: *total,
+                frames_per_second: *frames_per_second,
+                stage: *stage,
+                phase: view.phase,
+            },
             cx,
         ),
         ExportStatus::Idle => idle_body(&view, colors, width, height, cx),
@@ -1305,6 +1310,17 @@ fn idle_body(
                             .text_color(colors.muted_foreground)
                             .child(note),
                     )
+                })
+                .when_some(video.then(planned_encoder_note).flatten(), |this, note| {
+                    this.child(
+                        div()
+                            .text_size(rem(TEXT_XS))
+                            .p(px(8.0))
+                            .rounded(rem(RADIUS_MD))
+                            .bg(opacity(colors.muted, 0.7))
+                            .text_color(colors.muted_foreground)
+                            .child(note),
+                    )
                 }),
             cx,
         )
@@ -1405,16 +1421,33 @@ fn notice(colors: Palette, title: String, body: String) -> Div {
         )
 }
 
-fn running_body(
-    colors: Palette,
+/// What the progress readout shows while an export runs.
+#[derive(Clone, Copy)]
+struct RunningProgress {
+    /// How far through, from 0 to 1.
     fraction: f32,
+    /// Frames written so far, and how many there will be.
     frame: u64,
     total: u64,
     frames_per_second: f32,
     stage: Stage,
+    /// Animation phase for the moving highlight, from 0 to 1.
     phase: f32,
+}
+
+fn running_body(
+    colors: Palette,
+    progress: RunningProgress,
     cx: &mut Context<crate::shell::Shell>,
 ) -> Div {
+    let RunningProgress {
+        fraction,
+        frame,
+        total,
+        frames_per_second,
+        stage,
+        phase,
+    } = progress;
     let packaging = stage == Stage::Packaging;
     let stage_label = match stage {
         Stage::Rendering => t("export.stage.rendering"),
@@ -1488,6 +1521,32 @@ fn running_body(
         )
 }
 
+fn encoder_note(encoder: &str) -> Option<SharedString> {
+    if encoder.is_empty() {
+        return None;
+    }
+    let label = cutix_export::encoder_label(encoder);
+    Some(match cutix_export::encoder_kind(encoder) {
+        cutix_export::EncoderKind::StreamCopy => t("export.done.encoder.copy").into(),
+        cutix_export::EncoderKind::Hardware => {
+            t_args("export.done.encoder.hardware", &[("name", &label)]).into()
+        }
+        cutix_export::EncoderKind::Software => {
+            t_args("export.done.encoder.software", &[("name", &label)]).into()
+        }
+    })
+}
+
+fn planned_encoder_note() -> Option<SharedString> {
+    let factory = cutix_export::default_backend()?;
+    let label = cutix_export::encoder_label(factory.name());
+    Some(if factory.is_hardware() {
+        t_args("export.encoder.hardware", &[("name", &label)]).into()
+    } else {
+        t_args("export.encoder.software", &[("name", &label)]).into()
+    })
+}
+
 fn done_body(status: &ExportStatus, colors: Palette, cx: &mut Context<crate::shell::Shell>) -> Div {
     let ExportStatus::Done {
         mode,
@@ -1498,6 +1557,7 @@ fn done_body(status: &ExportStatus, colors: Palette, cx: &mut Context<crate::she
         bytes,
         frames_per_second,
         outputs,
+        encoder,
     } = status
     else {
         return div();
@@ -1523,6 +1583,9 @@ fn done_body(status: &ExportStatus, colors: Palette, cx: &mut Context<crate::she
     }
     if *has_audio {
         notes = notes.child(t("export.done.audio"));
+    }
+    if let Some(note) = encoder_note(encoder) {
+        notes = notes.child(note);
     }
     notes = match mode {
         ExportMode::Project => notes.child(t_args(
@@ -1680,10 +1743,11 @@ mod tests {
 
     #[test]
     fn a_destination_the_picker_returned_still_gets_the_mode_extension() {
-        let mut session = ExportSession::default();
-        session.mode = ExportMode::Project;
-
-        session.destination = Some(PathBuf::from("C:/out/Scene.mp4"));
+        let session = ExportSession {
+            mode: ExportMode::Project,
+            destination: Some(PathBuf::from("C:/out/Scene.mp4")),
+            ..ExportSession::default()
+        };
         assert_eq!(
             session.resolved_destination("ignored"),
             PathBuf::from("C:/out/Scene.ocut")
@@ -1723,8 +1787,10 @@ mod tests {
 
     #[test]
     fn switching_into_youtube_mode_keeps_the_destination_a_video() {
-        let mut session = ExportSession::default();
-        session.destination = Some(PathBuf::from("C:/out/My Clip.mp4"));
+        let mut session = ExportSession {
+            destination: Some(PathBuf::from("C:/out/My Clip.mp4")),
+            ..ExportSession::default()
+        };
         session.set_mode(ExportMode::YouTube);
         assert_eq!(
             session.resolved_destination("ignored"),

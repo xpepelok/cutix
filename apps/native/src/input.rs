@@ -234,6 +234,40 @@ pub fn key_down_with_clipboard(
     }
 }
 
+const FIELDS_REMEMBERED: usize = 512;
+
+thread_local! {
+    static TYPING_TARGETS: std::cell::RefCell<std::collections::VecDeque<FocusHandle>> =
+        const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+}
+
+fn remember_field(handle: &FocusHandle) {
+    TYPING_TARGETS.with(|known| {
+        let Ok(mut known) = known.try_borrow_mut() else {
+            return;
+        };
+        if known.iter().any(|known| known == handle) {
+            return;
+        }
+        if known.len() >= FIELDS_REMEMBERED {
+            known.pop_front();
+        }
+        known.push_back(handle.clone());
+    });
+}
+
+pub fn is_typing(window: &Window, cx: &App) -> bool {
+    let Some(focused) = window.focused(cx) else {
+        return false;
+    };
+    TYPING_TARGETS.with(|known| {
+        known
+            .try_borrow()
+            .map(|known| known.iter().any(|handle| *handle == focused))
+            .unwrap_or(true)
+    })
+}
+
 pub struct TextField {
     pub buffer: TextBuffer,
     pub focus: FocusHandle,
@@ -241,9 +275,11 @@ pub struct TextField {
 
 impl TextField {
     pub fn new(cx: &mut App, text: impl Into<String>) -> Self {
+        let focus = cx.focus_handle();
+        remember_field(&focus);
         Self {
             buffer: TextBuffer::new(text),
-            focus: cx.focus_handle(),
+            focus,
         }
     }
 
@@ -280,9 +316,7 @@ impl Default for FieldStyle {
 pub const MASK_CHARACTER: char = '\u{2022}';
 
 pub fn masked_text(text: &str) -> String {
-    std::iter::repeat(MASK_CHARACTER)
-        .take(text.chars().count())
-        .collect()
+    std::iter::repeat_n(MASK_CHARACTER, text.chars().count()).collect()
 }
 
 fn multiline_rows(

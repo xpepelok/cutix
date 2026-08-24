@@ -255,6 +255,18 @@ pub struct PropertiesPanel {
     rail_scroll: ScrollHandle,
 }
 
+/// One colour setting shown as a labelled swatch with an editable hex field.
+struct ColorRow {
+    label: String,
+    /// Which colour of the element this row edits.
+    setting: TextSetting,
+    /// The colour the element holds right now, as a hex string.
+    current: String,
+    /// Where the colour lives inside the element, for settings stored under a nested
+    /// object rather than at the top level. `None` when the setting names it directly.
+    path: Option<&'static str>,
+}
+
 impl PropertiesPanel {
     pub fn new(app: Entity<AppModel>, cx: &mut Context<Self>) -> Self {
         cx.observe(&app, |_, _, cx| cx.notify()).detach();
@@ -891,13 +903,16 @@ impl PropertiesPanel {
     fn color_row(
         &mut self,
         element: &TimelineElement,
-        label: String,
-        setting: TextSetting,
-        current: String,
-        path: Option<&'static str>,
+        row: ColorRow,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
+        let ColorRow {
+            label,
+            setting,
+            current,
+            path,
+        } = row;
         let colors = self.colors(cx);
         let id = element.base().id.clone();
         let key = format!("{id}-color-{setting:?}");
@@ -1491,9 +1506,9 @@ impl PropertiesPanel {
                 }
             }
             Target::Text(setting) => {
-                let value = if matches!(setting, TextSetting::Content) {
-                    text
-                } else if text.starts_with('#') {
+                // Colour settings are stored with a leading hash; content is stored
+                // verbatim. Both keep the typed text as-is, so they share a branch.
+                let value = if matches!(setting, TextSetting::Content) || text.starts_with('#') {
                     text
                 } else {
                     format!("#{text}")
@@ -1621,10 +1636,12 @@ impl PropertiesPanel {
             let row = match param.kind {
                 stickers::ParamKind::Color => self.color_row(
                     element,
-                    label,
-                    TextSetting::GraphicColor(param.key),
-                    edit::graphic_param_text(element, param),
-                    None,
+                    ColorRow {
+                        label,
+                        setting: TextSetting::GraphicColor(param.key),
+                        current: edit::graphic_param_text(element, param),
+                        path: None,
+                    },
                     window,
                     cx,
                 ),
@@ -2988,7 +3005,7 @@ impl PropertiesPanel {
         let asset = model.media_by_id(element.media_id()?)?;
         let store = cutix_project::MediaStore::for_project(&model.store, &project.metadata.id);
         let path = store.source_file(asset);
-        path.is_file().then(|| {
+        path.is_file().then_some({
             (
                 path,
                 matches!(asset.media_type, cutix_project::MediaType::Video),
@@ -5354,10 +5371,12 @@ impl PropertiesPanel {
         let text_color = self.resolved_color(element, "color", &text.color, cx);
         let color = self.color_row(
             element,
-            t("common.color"),
-            TextSetting::TextColor,
-            text_color,
-            Some("color"),
+            ColorRow {
+                label: t("common.color"),
+                setting: TextSetting::TextColor,
+                current: text_color,
+                path: Some("color"),
+            },
             window,
             cx,
         );
@@ -5451,10 +5470,12 @@ impl PropertiesPanel {
         );
         let stroke_color = self.color_row(
             element,
-            t("common.color"),
-            TextSetting::StrokeColor,
-            edit::nested_color(&text.stroke, "color", "#000000"),
-            None,
+            ColorRow {
+                label: t("common.color"),
+                setting: TextSetting::StrokeColor,
+                current: edit::nested_color(&text.stroke, "color", "#000000"),
+                path: None,
+            },
             window,
             cx,
         );
@@ -5487,10 +5508,12 @@ impl PropertiesPanel {
         );
         let shadow_color = self.color_row(
             element,
-            t("common.color"),
-            TextSetting::ShadowColor,
-            edit::nested_color(&text.shadow, "color", "#000000"),
-            None,
+            ColorRow {
+                label: t("common.color"),
+                setting: TextSetting::ShadowColor,
+                current: edit::nested_color(&text.shadow, "color", "#000000"),
+                path: None,
+            },
             window,
             cx,
         );
@@ -5551,10 +5574,12 @@ impl PropertiesPanel {
             self.resolved_color(element, "background.color", &text.background.color, cx);
         let background_color = self.color_row(
             element,
-            t("common.color"),
-            TextSetting::BackgroundColor,
-            background_hex,
-            Some("background.color"),
+            ColorRow {
+                label: t("common.color"),
+                setting: TextSetting::BackgroundColor,
+                current: background_hex,
+                path: Some("background.color"),
+            },
             window,
             cx,
         );

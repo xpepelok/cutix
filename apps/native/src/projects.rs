@@ -9,9 +9,9 @@ use gpui::{
 
 use crate::assets::icon;
 use crate::components::{
-    menu_item, menu_natural_height, menu_surface, overlay_backdrop, overlay_layer, overlay_root,
-    place_anchored, separator_v, tooltipped, Button, ButtonSize, ButtonVariant,
-    MENU_ITEM_HEIGHT_PX, MENU_OFFSET_PX,
+    menu_action, menu_item, menu_natural_height, menu_surface, overlay_backdrop, overlay_layer,
+    overlay_root, place_anchored, separator_v, tooltipped, Button, ButtonSize, ButtonVariant,
+    MenuPlacement, MENU_ITEM_HEIGHT_PX, MENU_OFFSET_PX, MENU_PAD_PX,
 };
 use crate::input::{text_field, FieldStyle, TextEvent, TextField};
 use crate::interaction::{mix, Overlay, OverlaySide, Tooltips, Transitions, TOOLTIP_DELAY};
@@ -23,7 +23,7 @@ use crate::theme::{
 
 const HEADER_ROW_HEIGHT_PX: f32 = 64.0;
 const TOOLBAR_HEIGHT_PX: f32 = 56.0;
-const SEARCH_WIDTH_PX: f32 = 240.0;
+const SEARCH_WIDTH_PX: f32 = 520.0;
 const CARD_GUTTER_PX: f32 = 12.0;
 const LIST_ROW_HEIGHT_PX: f32 = 56.0;
 const CHECKBOX_PX: f32 = 20.0;
@@ -31,6 +31,7 @@ const MENU_WIDTH_PX: f32 = 192.0;
 const LANGUAGE_MENU_WIDTH_PX: f32 = 176.0;
 const DIALOG_WIDTH_PX: f32 = 460.0;
 const CARD_THUMBNAIL_RATIO: f32 = 9.0 / 16.0;
+const MENU_OVERLAP_PX: f32 = 10.0;
 
 const SORT_KEYS: &[SortKey] = &[
     SortKey::CreatedAt,
@@ -38,6 +39,8 @@ const SORT_KEYS: &[SortKey] = &[
     SortKey::Name,
     SortKey::Duration,
 ];
+
+const PRIMARY_SORT_KEYS: &[SortKey] = &[SortKey::Name, SortKey::UpdatedAt];
 
 const CARD_ACTIONS: &[(&str, &str, &str)] = &[
     ("rename", "edit03", "common.rename"),
@@ -54,8 +57,11 @@ pub struct ProjectsView {
     search: TextField,
     scroll: ScrollHandle,
     sort_menu: Overlay,
+    sort_menu_at: gpui::Point<gpui::Pixels>,
+    sort_more: bool,
     card_menu: Overlay,
     card_menu_for: Option<String>,
+    card_menu_at: gpui::Point<gpui::Pixels>,
     language_menu: Overlay,
     selected: HashSet<String>,
     rename: Option<(String, TextField)>,
@@ -75,8 +81,11 @@ impl ProjectsView {
             search: TextField::new(cx, ""),
             scroll: ScrollHandle::new(),
             sort_menu: Overlay::new(OverlaySide::Bottom),
+            sort_menu_at: gpui::point(px(0.0), px(0.0)),
+            sort_more: false,
             card_menu: Overlay::new(OverlaySide::Bottom),
             card_menu_for: None,
+            card_menu_at: gpui::point(px(0.0), px(0.0)),
             language_menu: Overlay::new(OverlaySide::Bottom),
             selected: HashSet::new(),
             rename: None,
@@ -91,6 +100,7 @@ impl ProjectsView {
 
     fn escape(&mut self, cx: &mut Context<Self>) {
         self.sort_menu.dismiss();
+        self.sort_more = false;
         self.card_menu.dismiss();
         self.language_menu.dismiss();
         self.card_menu_for = None;
@@ -105,7 +115,7 @@ impl ProjectsView {
         &mut self,
         id: impl Into<String>,
         cx: &mut Context<Self>,
-    ) -> Box<dyn Fn(&bool, &mut Window, &mut App) + 'static> {
+    ) -> crate::components::HoverHandler {
         let id = id.into();
         Box::new(cx.listener(move |this: &mut Self, hovered: &bool, _, cx| {
             this.transitions.set(id.clone(), *hovered);
@@ -140,7 +150,24 @@ impl ProjectsView {
         .detach();
     }
 
+    fn selecting(&self) -> bool {
+        !self.selected.is_empty()
+    }
+
+    fn toggle_selected(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.selected.contains(id) {
+            self.selected.remove(id);
+        } else {
+            self.selected.insert(id.to_string());
+        }
+        cx.notify();
+    }
+
     fn open(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.selecting() {
+            self.toggle_selected(id, cx);
+            return;
+        }
         let id = id.to_string();
         self.app.update(cx, |model, cx| model.open_project(&id, cx));
     }
@@ -208,14 +235,19 @@ impl ProjectsView {
         let dark = model.dark;
 
         let mut toggles = Vec::new();
-        for (mode, glyph) in [
-            (ViewMode::Grid, "grid-view"),
-            (ViewMode::List, "left-to-right-list-dash"),
+        for (mode, glyph, label) in [
+            (ViewMode::Grid, "grid-view", "projects.view.grid"),
+            (
+                ViewMode::List,
+                "left-to-right-list-dash",
+                "projects.view.list",
+            ),
         ] {
             let id = format!("view-{glyph}");
             let progress = self.transitions.eased(&id);
+            let tip = self.tooltips.frame_for(&id);
             let active = view_mode == mode;
-            toggles.push(
+            toggles.push(tooltipped(
                 div()
                     .id(SharedString::from(id.clone()))
                     .flex()
@@ -246,8 +278,24 @@ impl ProjectsView {
                             .path(icon(glyph))
                             .text_color(colors.foreground),
                     ),
-            );
+                colors,
+                t(label),
+                tip,
+                OverlaySide::Bottom,
+            ));
         }
+
+        let view_switch = div()
+            .flex()
+            .h(px(40.0))
+            .flex_shrink_0()
+            .items_center()
+            .gap(px(2.0))
+            .px(px(6.0))
+            .rounded(rem(RADIUS_MD))
+            .border_1()
+            .border_color(colors.border)
+            .children(toggles);
 
         let search = text_field(
             "projects-search",
@@ -290,58 +338,51 @@ impl ProjectsView {
             .child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
-                    .gap(px(20.0))
+                    .gap(px(8.0))
+                    .text_size(rem(TEXT_BASE))
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .text_size(rem(TEXT_BASE))
-                            .child(
-                                div()
-                                    .id("projects-breadcrumb-home")
-                                    .cursor_pointer()
-                                    .text_color(colors.muted_foreground)
-                                    .child(t("projects.breadcrumb.home"))
-                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                        this.app.update(cx, |model, cx| {
-                                            model.route = Route::Home;
-                                            cx.notify();
-                                        });
-                                    })),
-                            )
-                            .child(
-                                svg()
-                                    .size(px(14.0))
-                                    .path(icon("chevron-right"))
-                                    .text_color(colors.muted_foreground),
-                            )
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(t("projects.breadcrumb.all")),
-                            ),
+                            .id("projects-breadcrumb-home")
+                            .cursor_pointer()
+                            .text_color(colors.muted_foreground)
+                            .child(t("projects.breadcrumb.home"))
+                            .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                                this.app.update(cx, |model, cx| {
+                                    model.route = Route::Home;
+                                    cx.notify();
+                                });
+                            })),
+                    )
+                    .child(
+                        svg()
+                            .size(px(14.0))
+                            .path(icon("chevron-right"))
+                            .text_color(colors.muted_foreground),
                     )
                     .child(
                         div()
-                            .flex()
-                            .h(px(40.0))
-                            .items_center()
-                            .gap(px(2.0))
-                            .px(px(6.0))
-                            .rounded(rem(RADIUS_MD))
-                            .border_1()
-                            .border_color(colors.border)
-                            .children(toggles),
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(t("projects.breadcrumb.all")),
                     ),
             )
             .child(
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w_0()
                     .items_center()
+                    .justify_end()
                     .gap(px(14.0))
-                    .child(div().w(px(SEARCH_WIDTH_PX)).flex_shrink_0().child(search))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(SEARCH_WIDTH_PX))
+                            .child(search),
+                    )
+                    .child(view_switch)
                     .child(language)
                     .child(tooltipped(
                         Button::new("projects-theme", colors)
@@ -463,13 +504,23 @@ impl ProjectsView {
 
         Some(
             overlay_root()
-                .child(overlay_backdrop("language-backdrop").on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.language_menu.dismiss();
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("language-backdrop")
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.language_menu.dismiss();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                this.language_menu.dismiss();
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::TopRight,
                     placement,
@@ -492,8 +543,6 @@ impl ProjectsView {
         let all_selected = !ids.is_empty() && ids.iter().all(|id| self.selected.contains(id));
         let selected_count = self.selected.len();
         let sort_progress = self.transitions.eased("projects-sort");
-        let order_progress = self.transitions.eased("projects-order");
-        let sort_menu = self.sort_menu(sort_key, cx);
         let bulk = (selected_count > 0).then(|| self.bulk_actions(cx));
 
         div()
@@ -537,46 +586,33 @@ impl ProjectsView {
                     )
                     .child(separator_v(colors, 16.0))
                     .child(
-                        div()
-                            .relative()
-                            .flex()
-                            .flex_shrink_0()
-                            .child(
-                                Button::new("projects-sort", colors)
-                                    .variant(ButtonVariant::Text)
-                                    .hover(sort_progress)
-                                    .label(t(sort_key.label_key()))
-                                    .build()
-                                    .h(px(28.0))
-                                    .pl(px(8.0))
-                                    .text_color(colors.muted_foreground)
-                                    .on_hover(self.hover("projects-sort", cx))
-                                    .on_click(cx.listener(|this: &mut Self, _, _, cx| {
+                        div().flex().flex_shrink_0().child(
+                            Button::new("projects-sort", colors)
+                                .variant(ButtonVariant::Text)
+                                .hover(sort_progress)
+                                .icon(if ascending {
+                                    "sorting-one-nine"
+                                } else {
+                                    "sorting-nine-one"
+                                })
+                                .label(t(sort_key.label_key()))
+                                .build()
+                                .h(px(28.0))
+                                .pl(px(8.0))
+                                .text_color(colors.muted_foreground)
+                                .on_hover(self.hover("projects-sort", cx))
+                                .on_click(cx.listener(
+                                    |this: &mut Self, event: &gpui::ClickEvent, _, cx| {
                                         this.language_menu.dismiss();
-                                        this.sort_menu.toggle();
+                                        this.card_menu.dismiss();
+                                        this.card_menu_for = None;
+                                        this.sort_menu_at = event.position();
+                                        this.sort_more = false;
+                                        this.sort_menu.set_open(true);
                                         cx.notify();
-                                    })),
-                            )
-                            .children(sort_menu),
-                    )
-                    .child(
-                        Button::new("projects-order", colors)
-                            .variant(ButtonVariant::Text)
-                            .hover(order_progress)
-                            .icon(if ascending {
-                                "sorting-one-nine"
-                            } else {
-                                "sorting-nine-one"
-                            })
-                            .build()
-                            .size(px(28.0))
-                            .on_hover(self.hover("projects-order", cx))
-                            .on_click(cx.listener(|this: &mut Self, _, _, cx| {
-                                this.app.update(cx, |model, cx| {
-                                    model.sort_ascending = !model.sort_ascending;
-                                    cx.notify();
-                                });
-                            })),
+                                    },
+                                )),
+                        ),
                     ),
             )
             .children(bulk)
@@ -586,13 +622,15 @@ impl ProjectsView {
         let colors = self.colors(cx);
         let duplicate = self.transitions.eased("bulk-duplicate");
         let delete = self.transitions.eased("bulk-delete");
+        let duplicate_tip = self.tooltips.frame_for("bulk-duplicate");
+        let delete_tip = self.tooltips.frame_for("bulk-delete");
 
         div()
             .flex()
             .items_center()
             .gap(px(10.0))
             .px(px(12.0))
-            .child(
+            .child(tooltipped(
                 Button::new("bulk-duplicate", colors)
                     .variant(ButtonVariant::Outline)
                     .size(ButtonSize::Icon)
@@ -611,8 +649,12 @@ impl ProjectsView {
                         this.selected.clear();
                         cx.notify();
                     })),
-            )
-            .child(
+                colors,
+                t("common.duplicate"),
+                duplicate_tip,
+                OverlaySide::Bottom,
+            ))
+            .child(tooltipped(
                 Button::new("bulk-delete", colors)
                     .variant(ButtonVariant::DestructiveForeground)
                     .size(ButtonSize::Icon)
@@ -636,72 +678,228 @@ impl ProjectsView {
                         }
                         cx.notify();
                     })),
-            )
+                colors,
+                t("common.delete"),
+                delete_tip,
+                OverlaySide::Bottom,
+            ))
     }
 
-    fn sort_menu(&mut self, active: SortKey, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn sort_row(
+        &mut self,
+        colors: Palette,
+        key: SortKey,
+        active: SortKey,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let id = format!("projects-sort-{}", key.label_key());
+        let highlighted = self.transitions.eased(&id) > 0.5;
+        let chosen = key == active;
+        menu_action(
+            SharedString::from(id.clone()),
+            colors,
+            t(key.label_key()),
+            if chosen { "tick02" } else { "" },
+            highlighted || chosen,
+            false,
+        )
+        .on_hover(self.hover(id, cx))
+        .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+            this.app.update(cx, |model, cx| {
+                model.sort_key = key;
+                cx.notify();
+            });
+            this.sort_more = false;
+            this.sort_menu.dismiss();
+            cx.notify();
+        }))
+        .into_any_element()
+    }
+
+    fn flyout_row(&mut self, colors: Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let open = self.sort_more;
+        menu_action(
+            SharedString::from("projects-sort-more"),
+            colors,
+            t("projects.sort.more"),
+            "",
+            open,
+            false,
+        )
+        .child(div().flex_1())
+        .child(
+            svg()
+                .size(px(13.0))
+                .flex_shrink_0()
+                .path(icon("chevron-right"))
+                .text_color(opacity(colors.popover_foreground, 0.7)),
+        )
+        .on_hover(cx.listener(move |this: &mut Self, over: &bool, _, cx| {
+            if *over {
+                this.sort_more = true;
+                cx.notify();
+            }
+        }))
+        .into_any_element()
+    }
+
+    fn order_row(
+        &mut self,
+        colors: Palette,
+        ascending: bool,
+        current: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let id = format!("projects-order-{ascending}");
+        let highlighted = self.transitions.eased(&id) > 0.5;
+        let chosen = current == ascending;
+        menu_action(
+            SharedString::from(id.clone()),
+            colors,
+            t(if ascending {
+                "projects.sort.ascending"
+            } else {
+                "projects.sort.descending"
+            }),
+            if chosen { "tick02" } else { "" },
+            highlighted || chosen,
+            false,
+        )
+        .on_hover(self.hover(id, cx))
+        .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+            this.app.update(cx, |model, cx| {
+                model.sort_ascending = ascending;
+                cx.notify();
+            });
+            this.sort_more = false;
+            this.sort_menu.dismiss();
+            cx.notify();
+        }))
+        .into_any_element()
+    }
+
+    fn sort_menu(
+        &mut self,
+        active: SortKey,
+        ascending: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         let frame = self.sort_menu.frame();
         if !frame.visible {
             return None;
         }
         let colors = self.colors(cx);
+
+        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+        for key in PRIMARY_SORT_KEYS {
+            rows.push(self.sort_row(colors, *key, active, cx));
+        }
+        let flyout_anchor = rows.len();
+        rows.push(self.flyout_row(colors, cx));
+        rows.push(self.order_row(colors, true, ascending, cx));
+        rows.push(self.order_row(colors, false, ascending, cx));
+
         let natural = (
             MENU_WIDTH_PX,
-            menu_natural_height(SORT_KEYS.len(), MENU_ITEM_HEIGHT_PX),
+            menu_natural_height(rows.len(), MENU_ITEM_HEIGHT_PX),
         );
         let placement = place_anchored(
             frame,
             OverlaySide::Bottom,
             natural,
-            (0.0, 28.0 + MENU_OFFSET_PX),
+            (
+                f32::from(self.sort_menu_at.x),
+                f32::from(self.sort_menu_at.y) + MENU_OFFSET_PX,
+            ),
         );
 
-        let items = SORT_KEYS
+        let more: Vec<SortKey> = SORT_KEYS
             .iter()
-            .map(|key| {
-                let key = *key;
-                let id = format!("sort-{}", key.label_key());
-                let highlighted = self.transitions.eased(&id) > 0.5;
-                menu_item(
-                    SharedString::from(id.clone()),
-                    colors,
-                    t(key.label_key()),
-                    highlighted,
-                    key == active,
-                )
-                .on_hover(self.hover(id, cx))
-                .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
-                    this.app.update(cx, |model, cx| {
-                        model.sort_key = key;
-                        cx.notify();
-                    });
-                    this.sort_menu.dismiss();
-                    cx.notify();
-                }))
-            })
-            .collect::<Vec<_>>();
+            .filter(|key| !PRIMARY_SORT_KEYS.contains(key))
+            .copied()
+            .collect();
+
+        let flyout = (self.sort_more && !more.is_empty()).then(|| {
+            let items: Vec<gpui::AnyElement> = more
+                .into_iter()
+                .map(|key| self.sort_row(colors, key, active, cx))
+                .collect();
+
+            let child = MenuPlacement {
+                left: placement.left + placement.width - MENU_OVERLAP_PX,
+                top: placement.top + MENU_PAD_PX + flyout_anchor as f32 * MENU_ITEM_HEIGHT_PX,
+                width: MENU_WIDTH_PX,
+                height: menu_natural_height(items.len(), MENU_ITEM_HEIGHT_PX),
+                opacity: placement.opacity,
+            };
+
+            overlay_layer(
+                gpui::Corner::TopLeft,
+                child,
+                menu_surface(colors, child)
+                    .id("projects-sort-flyout")
+                    .children(items)
+                    .on_hover(cx.listener(move |this: &mut Self, over: &bool, _, cx| {
+                        if *over {
+                            this.sort_more = true;
+                            cx.notify();
+                        }
+                    })),
+            )
+        });
 
         Some(
             overlay_root()
-                .child(overlay_backdrop("sort-backdrop").on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        this.sort_menu.dismiss();
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("sort-backdrop")
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                cx.stop_propagation();
+                                this.sort_more = false;
+                                this.sort_menu.dismiss();
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                cx.stop_propagation();
+                                this.sort_more = false;
+                                this.sort_menu.dismiss();
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
                     gpui::Corner::TopLeft,
                     placement,
-                    menu_surface(colors, placement).children(items),
-                )),
+                    menu_surface(colors, placement).children(rows),
+                ))
+                .children(flyout),
         )
     }
 
-    fn card_menu(&mut self, summary: &ProjectSummary, cx: &mut Context<Self>) -> Option<Div> {
-        if self.card_menu_for.as_deref() != Some(summary.id.as_str()) {
-            return None;
-        }
+    fn open_card_menu(&mut self, id: &str, at: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+        self.sort_menu.dismiss();
+        self.sort_more = false;
+        self.language_menu.dismiss();
+        self.card_menu_at = at;
+        self.card_menu_for = Some(id.to_string());
+        self.card_menu.set_open(true);
+        cx.notify();
+    }
+
+    fn card_menu(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let target = self.card_menu_for.clone()?;
+        let summary = self
+            .app
+            .read(cx)
+            .projects
+            .iter()
+            .find(|project| project.id == target)
+            .cloned()?;
+        let summary = &summary;
         let frame = self.card_menu.frame();
         if !frame.visible {
             return None;
@@ -715,7 +913,10 @@ impl ProjectsView {
             frame,
             OverlaySide::Bottom,
             natural,
-            (28.0, 28.0 + MENU_OFFSET_PX),
+            (
+                f32::from(self.card_menu_at.x),
+                f32::from(self.card_menu_at.y) + MENU_OFFSET_PX,
+            ),
         );
 
         let items = CARD_ACTIONS
@@ -725,56 +926,48 @@ impl ProjectsView {
                 let id = format!("card-{}-{action}", summary.id);
                 let highlighted = self.transitions.eased(&id) > 0.5;
                 let summary = summary.clone();
-                let destructive = action == "delete";
 
-                let fill = if highlighted {
-                    colors.popover_hover
-                } else {
-                    opacity(colors.popover_hover, 0.0)
-                };
-                let tint = if destructive {
-                    colors.destructive
-                } else {
-                    colors.popover_foreground
-                };
-
-                div()
-                    .id(SharedString::from(id.clone()))
-                    .flex()
-                    .w_full()
-                    .h(px(MENU_ITEM_HEIGHT_PX))
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap(px(8.0))
-                    .rounded(rem(RADIUS_SM))
-                    .px(px(10.0))
-                    .cursor_pointer()
-                    .text_size(rem(TEXT_SM))
-                    .text_color(tint)
-                    .bg(fill)
-                    .on_hover(self.hover(id, cx))
-                    .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
-                        cx.stop_propagation();
-                        this.run_card_action(action, &summary, cx);
-                    }))
-                    .child(svg().size(px(14.0)).path(icon(glyph)).text_color(tint))
-                    .child(t(label))
+                menu_action(
+                    SharedString::from(id.clone()),
+                    colors,
+                    t(label),
+                    glyph,
+                    highlighted,
+                    action == "delete",
+                )
+                .on_hover(self.hover(id, cx))
+                .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                    cx.stop_propagation();
+                    this.run_card_action(action, &summary, cx);
+                }))
             })
             .collect::<Vec<_>>();
 
         Some(
             overlay_root()
-                .child(overlay_backdrop("card-backdrop").on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this: &mut Self, _, _, cx| {
-                        cx.stop_propagation();
-                        this.card_menu.dismiss();
-                        this.card_menu_for = None;
-                        cx.notify();
-                    }),
-                ))
+                .child(
+                    overlay_backdrop("card-backdrop")
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                cx.stop_propagation();
+                                this.card_menu.dismiss();
+                                this.card_menu_for = None;
+                                cx.notify();
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(|this: &mut Self, _, _, cx| {
+                                cx.stop_propagation();
+                                this.card_menu.dismiss();
+                                this.card_menu_for = None;
+                                cx.notify();
+                            }),
+                        ),
+                )
                 .child(overlay_layer(
-                    gpui::Corner::TopRight,
+                    gpui::Corner::TopLeft,
                     placement,
                     menu_surface(colors, placement).children(items),
                 )),
@@ -799,22 +992,21 @@ impl ProjectsView {
             .build()
             .size(px(28.0))
             .on_hover(self.hover(id, cx))
-            .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
-                cx.stop_propagation();
-                let same = this.card_menu_for.as_deref() == Some(target.as_str());
-                this.sort_menu.dismiss();
-                this.language_menu.dismiss();
-                if same {
-                    this.card_menu.dismiss();
-                    this.card_menu_for = None;
-                } else {
-                    this.card_menu.dismiss();
-                    this.card_menu = Overlay::new(OverlaySide::Bottom);
-                    this.card_menu.set_open(true);
-                    this.card_menu_for = Some(target.clone());
-                }
-                cx.notify();
-            }))
+            .on_click(
+                cx.listener(move |this: &mut Self, event: &gpui::ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    let same = this.card_menu_for.as_deref() == Some(target.as_str())
+                        && this.card_menu.is_open();
+                    if same {
+                        this.card_menu.dismiss();
+                        this.card_menu_for = None;
+                        cx.notify();
+                    } else {
+                        let at = event.position();
+                        this.open_card_menu(&target, at, cx);
+                    }
+                }),
+            )
     }
 
     fn thumbnail(&self, summary: &ProjectSummary, size: f32, colors: Palette, cx: &App) -> Div {
@@ -847,12 +1039,12 @@ impl ProjectsView {
         let hover_key = format!("card-{id}");
         let hovered = self.transitions.eased(&hover_key) > 0.02;
         let duration = format_duration(summary.duration);
-        let menu = self.card_menu(summary, cx);
-        let has_menu = menu.is_some();
+        let has_menu = self.card_menu_for.as_deref() == Some(id.as_str());
         let thumbnail = self.thumbnail(summary, 48.0, colors, cx);
         let menu_trigger = self.menu_trigger(summary, colors, cx);
         let open_id = id.clone();
         let toggle_id = id.clone();
+        let context_id = id.clone();
 
         div()
             .w(relative(0.25))
@@ -867,6 +1059,16 @@ impl ProjectsView {
                     .w_full()
                     .gap(px(8.0))
                     .on_hover(self.hover(hover_key, cx))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(
+                            move |this: &mut Self, event: &gpui::MouseDownEvent, _, cx| {
+                                cx.stop_propagation();
+                                let at = event.position;
+                                this.open_card_menu(&context_id, at, cx);
+                            },
+                        ),
+                    )
                     .child(
                         div()
                             .id(SharedString::from(format!("open-{id}")))
@@ -957,8 +1159,7 @@ impl ProjectsView {
                                 .top(px(12.0))
                                 .right(px(12.0))
                                 .flex()
-                                .child(menu_trigger)
-                                .children(menu),
+                                .child(menu_trigger),
                         )
                     }),
             )
@@ -969,13 +1170,14 @@ impl ProjectsView {
         let id = summary.id.clone();
         let selected = self.selected.contains(&id);
         let duration = format_duration(summary.duration).unwrap_or_else(|| "—".to_string());
-        let menu = self.card_menu(summary, cx);
         let thumbnail = self.thumbnail(summary, 20.0, colors, cx);
         let menu_trigger = self.menu_trigger(summary, colors, cx);
         let open_id = id.clone();
         let toggle_id = id.clone();
+        let context_id = id.clone();
 
         div()
+            .id(SharedString::from(format!("row-{id}")))
             .relative()
             .flex()
             .w_full()
@@ -987,6 +1189,16 @@ impl ProjectsView {
             .border_b_1()
             .border_color(opacity(colors.border, 0.5))
             .when(selected, |this| this.bg(opacity(colors.primary, 0.05)))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(
+                    move |this: &mut Self, event: &gpui::MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        let at = event.position;
+                        this.open_card_menu(&context_id, at, cx);
+                    },
+                ),
+            )
             .child(
                 checkbox(
                     SharedString::from(format!("row-check-{id}")),
@@ -1047,14 +1259,7 @@ impl ProjectsView {
                             .child(format_date(&summary.created_at)),
                     ),
             )
-            .child(
-                div()
-                    .relative()
-                    .flex()
-                    .flex_shrink_0()
-                    .child(menu_trigger)
-                    .children(menu),
-            )
+            .child(div().relative().flex().flex_shrink_0().child(menu_trigger))
     }
 
     fn notice_banner(&mut self, cx: &mut Context<Self>) -> Option<Div> {
@@ -1532,6 +1737,8 @@ impl Render for ProjectsView {
         let model = self.app.read(cx);
         let loaded = model.projects_loaded;
         let view_mode = model.view_mode;
+        let sort_key = model.sort_key;
+        let ascending = model.sort_ascending;
         let projects = model.visible_projects();
 
         self.tooltips.tick();
@@ -1587,6 +1794,8 @@ impl Render for ProjectsView {
         };
 
         let bar = scrollbar_v(&self.scroll, colors);
+        let sort_menu = self.sort_menu(sort_key, ascending, cx);
+        let card_menu = self.card_menu(cx);
         let rename = self.rename_dialog(window, cx);
         let delete = self.delete_dialog(cx);
         let info = self.info_dialog(cx);
@@ -1630,6 +1839,8 @@ impl Render for ProjectsView {
                     )
                     .children(bar),
             )
+            .children(sort_menu)
+            .children(card_menu)
             .children(rename)
             .children(delete)
             .children(info)
@@ -1673,6 +1884,34 @@ mod tests {
             "dialog.projectInfo.id",
         ] {
             assert_ne!(t(key), key, "{key}");
+        }
+    }
+
+    #[test]
+    fn the_sort_menu_splits_primary_keys_from_the_flyout() {
+        assert_eq!(PRIMARY_SORT_KEYS, &[SortKey::Name, SortKey::UpdatedAt]);
+        let more: Vec<SortKey> = SORT_KEYS
+            .iter()
+            .filter(|key| !PRIMARY_SORT_KEYS.contains(key))
+            .copied()
+            .collect();
+        assert_eq!(more, vec![SortKey::CreatedAt, SortKey::Duration]);
+        assert_eq!(more.len() + PRIMARY_SORT_KEYS.len(), SORT_KEYS.len());
+    }
+
+    #[test]
+    fn the_sort_menu_strings_all_resolve() {
+        for key in [
+            "projects.sort.ascending",
+            "projects.sort.descending",
+            "projects.sort.more",
+            "projects.view.grid",
+            "projects.view.list",
+        ] {
+            assert_ne!(t(key), key, "{key}");
+        }
+        for key in SORT_KEYS {
+            assert_ne!(t(key.label_key()), key.label_key());
         }
     }
 

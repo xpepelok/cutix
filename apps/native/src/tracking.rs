@@ -68,7 +68,7 @@ pub fn tracking_sample_count(duration_seconds: f64, fps: f32) -> usize {
     } else {
         0
     };
-    planned.min(MAX_TRACKING_SAMPLES).max(2)
+    planned.clamp(2, MAX_TRACKING_SAMPLES)
 }
 
 fn luma_frame(path: &Path, seconds: f64) -> Option<Vec<f32>> {
@@ -311,16 +311,29 @@ mod tests {
         }
     }
 
+    /// The sizes a placement is worked out against: the source frame and the canvas it
+    /// is being laid onto.
+    #[derive(Clone, Copy)]
+    struct Frames {
+        source_width: f64,
+        source_height: f64,
+        canvas_width: f64,
+        canvas_height: f64,
+    }
+
     fn renderer_oracle(
         u: f64,
         v: f64,
         transform: &Transform,
         crop: (f64, f64, f64, f64),
-        source_width: f64,
-        source_height: f64,
-        canvas_width: f64,
-        canvas_height: f64,
+        frames: Frames,
     ) -> (f64, f64) {
+        let Frames {
+            source_width,
+            source_height,
+            canvas_width,
+            canvas_height,
+        } = frames;
         let (left, top, right, bottom) = crop;
         let contain = (canvas_width / source_width).min(canvas_height / source_height);
         let abs_width = source_width * contain * transform.scale_x.abs();
@@ -375,7 +388,18 @@ mod tests {
         for (index, (transform, crop)) in cases.iter().enumerate() {
             for (u, v) in probes {
                 let mine = source_to_canvas(u, v, transform, 1280.0, 720.0, 1920.0, 1080.0);
-                let oracle = renderer_oracle(u, v, transform, *crop, 1280.0, 720.0, 1920.0, 1080.0);
+                let oracle = renderer_oracle(
+                    u,
+                    v,
+                    transform,
+                    *crop,
+                    Frames {
+                        source_width: 1280.0,
+                        source_height: 720.0,
+                        canvas_width: 1920.0,
+                        canvas_height: 1080.0,
+                    },
+                );
                 assert!(
                     (mine.0 - oracle.0).abs() < 1e-6 && (mine.1 - oracle.1).abs() < 1e-6,
                     "case {index} probe ({u},{v}): {mine:?} vs {oracle:?}"

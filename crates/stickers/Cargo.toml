@@ -1,0 +1,20 @@
+[package]
+name = "stickers"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+resvg = { version = "0.45", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tiny-skia = "0.11"
+usvg = { version = "0.45", default-features = false }
+
+[lints]
+workspace = true

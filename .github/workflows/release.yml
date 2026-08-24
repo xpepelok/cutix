@@ -55,7 +55,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo build -p cutix --release
+      - run: cargo build -p cutix --release --locked
 
       - name: Package
         shell: pwsh
@@ -105,7 +105,7 @@ jobs:
           tar -xzf onnxruntime.tgz
           echo "ORT_DYLIB_PATH=$PWD/onnxruntime-linux-x64-1.20.1/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
-      - run: cargo build -p cutix --release
+      - run: cargo build -p cutix --release --locked
 
       - name: Package
         run: |
@@ -150,9 +150,100 @@ jobs:
           path: cutix-nixos-x64.tar.gz
           if-no-files-found: error
 
-  release:
-    needs: [guard, windows, linux, nixos]
+  windows-arm:
+    needs: guard
     if: needs.guard.outputs.fresh == 'yes'
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch ONNX Runtime
+        shell: pwsh
+        run: |
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-win-arm64-1.20.1.zip"
+          Invoke-WebRequest -Uri $url -OutFile onnxruntime.zip
+          Expand-Archive -Path onnxruntime.zip -DestinationPath ort
+          $dll = (Get-ChildItem -Recurse -Filter onnxruntime.dll ort | Select-Object -First 1).FullName
+          "ORT_DYLIB_PATH=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - run: cargo build -p cutix --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/cutix.exe dist/
+          Copy-Item -Recurse lang dist/lang
+          Copy-Item LICENSE dist/
+          Copy-Item $env:ORT_DYLIB_PATH dist/
+          Compress-Archive -Path dist/* -DestinationPath cutix-windows-arm64.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-arm
+          path: cutix-windows-arm64.zip
+          if-no-files-found: error
+
+  linux-arm:
+    needs: guard
+    if: needs.guard.outputs.fresh == 'yes'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxrandr-dev \
+            pkg-config
+
+      - name: Fetch ONNX Runtime
+        run: |
+          url=https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-aarch64-1.20.1.tgz
+          curl -sSL -o onnxruntime.tgz "$url"
+          tar -xzf onnxruntime.tgz
+          echo "ORT_DYLIB_PATH=$PWD/onnxruntime-linux-aarch64-1.20.1/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+
+      - run: cargo build -p cutix --release --locked
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/cutix dist/
+          cp -r lang dist/
+          cp LICENSE dist/
+          cp "$ORT_DYLIB_PATH" dist/
+          tar -czf cutix-linux-arm64.tar.gz -C dist .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-arm
+          path: cutix-linux-arm64.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [guard, windows, linux, nixos, windows-arm, linux-arm]
+    if: |
+      always()
+      && needs.guard.outputs.fresh == 'yes'
+      && needs.windows.result == 'success'
+      && needs.linux.result == 'success'
+      && needs.nixos.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -166,7 +257,32 @@ jobs:
 
       - name: Checksums
         working-directory: dist
-        run: sha256sum cutix-windows-x64.zip cutix-linux-x64.tar.gz cutix-nixos-x64.tar.gz > checksums.txt
+        run: |
+          required=(
+            cutix-windows-x64.zip
+            cutix-linux-x64.tar.gz
+            cutix-nixos-x64.tar.gz
+          )
+          optional=(
+            cutix-windows-arm64.zip
+            cutix-linux-arm64.tar.gz
+          )
+          for artifact in "${required[@]}"; do
+            if [ ! -f "$artifact" ]; then
+              echo "::error::$artifact never made it out of its build"
+              exit 1
+            fi
+          done
+          shipping=("${required[@]}")
+          for artifact in "${optional[@]}"; do
+            if [ -f "$artifact" ]; then
+              shipping+=("$artifact")
+            else
+              echo "::warning::$artifact is missing — releasing without it"
+            fi
+          done
+          sha256sum "${shipping[@]}" > checksums.txt
+          cat checksums.txt
 
       - name: Notes
         run: |
@@ -183,9 +299,8 @@ jobs:
           target_commitish: ${{ github.sha }}
           body_path: notes.md
           files: |
-            dist/cutix-windows-x64.zip
-            dist/cutix-linux-x64.tar.gz
-            dist/cutix-nixos-x64.tar.gz
+            dist/cutix-*.zip
+            dist/cutix-*.tar.gz
             dist/checksums.txt
           draft: false
           prerelease: false

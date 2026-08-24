@@ -17,16 +17,27 @@ pub struct StabilizeSample {
     pub dy: f32,
 }
 
+/// What a stabilization pass measured and decided.
 #[derive(Clone, Debug, Default)]
 pub struct StabilizeAnalysis {
     pub samples: Vec<StabilizeSample>,
     pub sample_size: usize,
 
+    // These two are the evidence that the pass did something: mean frame-to-frame motion
+    // before correction and after it. No view surfaces them yet, so `dead_code` is right
+    // that the shipping build never reads them — but they are what the regression test
+    // asserts on, and dropping them would leave nothing checking that stabilization
+    // stabilizes. Kept deliberately, not overlooked.
+    #[allow(dead_code)]
     pub motion_before: f32,
+    #[allow(dead_code)]
     pub motion_after: f32,
 }
 
 impl StabilizeAnalysis {
+    /// Only the tests in this file ask for this; compiled for them alone so the
+    /// shipping binary does not carry a method nothing calls.
+    #[cfg(test)]
     pub fn improvement(&self) -> f32 {
         if self.motion_before <= f32::EPSILON {
             return 0.0;
@@ -69,7 +80,7 @@ pub fn stabilize_sample_count(duration_seconds: f64, fps: f32) -> usize {
     } else {
         0
     };
-    planned.min(MAX_STABILIZATION_SAMPLES).max(2)
+    planned.clamp(2, MAX_STABILIZATION_SAMPLES)
 }
 
 fn luma_frame(path: &Path, seconds: f64) -> Option<Vec<f32>> {

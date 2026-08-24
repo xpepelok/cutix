@@ -102,7 +102,7 @@ impl ShapePreviews {
         }
         let raster = stickers::rasterize_sticker(sticker_id, PREVIEW_SIZE, PREVIEW_SIZE).ok()?;
         let mut bgra = raster.rgba;
-        for pixel in bgra.chunks_exact_mut(4) {
+        for pixel in bgra.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let buffer = image::ImageBuffer::from_raw(raster.width, raster.height, bgra)?;

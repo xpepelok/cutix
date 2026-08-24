@@ -1,7 +1,7 @@
 use cutix_i18n::t;
 use gpui::{
-    div, prelude::*, px, relative, svg, App, Context, DragMoveEvent, Entity, KeyDownEvent,
-    SharedString, Window,
+    div, prelude::*, px, relative, svg, Context, DragMoveEvent, Entity, KeyDownEvent, SharedString,
+    Window,
 };
 
 use crate::assets::icon;
@@ -712,6 +712,7 @@ impl Shell {
         let theme_tip = self.tooltips.frame_for("header-theme");
         let export_tip = self.tooltips.frame_for("header-export");
         let logo_tip = self.tooltips.frame_for("header-logo");
+        let returning = self.app.read(cx).editor_origin == crate::state::Route::Library;
         let shortcuts_tip = self.tooltips.frame_for("header-shortcuts");
 
         div()
@@ -751,7 +752,11 @@ impl Shell {
                                     .text_color(colors.foreground),
                             ),
                         colors,
-                        t("projects.title"),
+                        if returning {
+                            t("common.back")
+                        } else {
+                            t("projects.title")
+                        },
                         logo_tip,
                         OverlaySide::Bottom,
                     ))
@@ -957,10 +962,7 @@ pub fn translatable_locales() -> Vec<(String, String)> {
 #[derive(Debug)]
 struct RowSplit;
 
-fn header_hover(
-    id: &'static str,
-    cx: &mut Context<Shell>,
-) -> Box<dyn Fn(&bool, &mut Window, &mut App) + 'static> {
+fn header_hover(id: &'static str, cx: &mut Context<Shell>) -> crate::components::HoverHandler {
     Box::new(cx.listener(move |this: &mut Shell, hovered: &bool, _, cx| {
         this.transitions.set(id, *hovered);
         this.tooltips.hover(id, *hovered);
@@ -968,9 +970,7 @@ fn header_hover(
     }))
 }
 
-fn header_press(
-    cx: &mut Context<Shell>,
-) -> Box<dyn Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static> {
+fn header_press(cx: &mut Context<Shell>) -> crate::components::PressHandler {
     Box::new(cx.listener(move |this: &mut Shell, _, _, cx| {
         this.tooltips.dismiss();
         cx.notify();
@@ -1090,9 +1090,7 @@ impl Render for Shell {
                         return;
                     };
 
-                    let typing = window
-                        .focused(cx)
-                        .is_some_and(|handle| handle != this.focus);
+                    let typing = crate::input::is_typing(window, cx);
                     if !chord.control && !chord.alt && typing {
                         return;
                     }

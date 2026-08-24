@@ -12,8 +12,6 @@ use gpui::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
-    StartSetup,
-
     AddAccount,
 
     SubmitSignIn,
@@ -117,16 +115,31 @@ pub fn field_style(placeholder: String) -> FieldStyle {
     }
 }
 
+/// Everything about one text input except where its value lives.
+pub struct InputSpec<'field> {
+    /// Stable element id, so the field keeps focus and caret across redraws.
+    pub id: SharedString,
+    /// The text and caret state to render.
+    pub field: &'field TextField,
+    pub colors: Palette,
+    pub style: FieldStyle,
+    /// The action to dispatch when the field is submitted, if it submits at all.
+    pub submit: Option<Action>,
+}
+
 pub fn input<V: Host>(
-    id: impl Into<SharedString>,
-    field: &TextField,
-    colors: Palette,
-    style: FieldStyle,
-    submit: Option<Action>,
+    spec: InputSpec<'_>,
     pick: impl Fn(&mut Youtube) -> Option<&mut TextField> + 'static,
     window: &Window,
     cx: &mut Context<V>,
 ) -> Stateful<Div> {
+    let InputSpec {
+        id,
+        field,
+        colors,
+        style,
+        submit,
+    } = spec;
     let multiline = style.multiline;
 
     text_field(id, field, colors, style, window).on_key_down(cx.listener(
@@ -220,6 +233,311 @@ fn stepper<V: Host>(
             }
             cx.notify();
         }))
+}
+
+fn filter_stepper<V: Host>(
+    id: String,
+    colors: Palette,
+    glyph: &'static str,
+    edge: Edge,
+    shift: impl Fn(&mut Scheduled) + 'static,
+    cx: &mut Context<V>,
+) -> Stateful<Div> {
+    div()
+        .id(SharedString::from(id))
+        .size(px(22.0))
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded(rems(RADIUS_SM))
+        .cursor_pointer()
+        .bg(opacity(colors.accent, 0.5))
+        .child(
+            gpui::svg()
+                .size(px(11.0))
+                .path(crate::assets::icon(glyph))
+                .text_color(colors.foreground),
+        )
+        .on_click(cx.listener(move |this: &mut V, _, _, cx| {
+            if let Some(when) = this
+                .youtube()
+                .filters
+                .as_mut()
+                .and_then(|filters| filters.edge_mut(edge).as_mut())
+            {
+                shift(when);
+            }
+            cx.notify();
+        }))
+}
+
+fn filter_day<V: Host>(
+    id: String,
+    colors: Palette,
+    day: u32,
+    selected: bool,
+    edge: Edge,
+    cx: &mut Context<V>,
+) -> Stateful<Div> {
+    cell(
+        id,
+        colors,
+        day.to_string(),
+        selected,
+        move |state| {
+            if let Some(when) = state
+                .filters
+                .as_mut()
+                .and_then(|filters| filters.edge_mut(edge).as_mut())
+            {
+                when.day = day;
+            }
+        },
+        cx,
+    )
+}
+
+fn filter_date_button<V: Host>(
+    colors: Palette,
+    filters: &Filters,
+    edge: Edge,
+    now: i64,
+    cx: &mut Context<V>,
+) -> Div {
+    let name = match edge {
+        Edge::From => "from",
+        Edge::To => "to",
+    };
+    let chosen = filters.edge(edge);
+    let open = filters.open == Some(edge);
+
+    let mut row = div()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .flex_1()
+        .min_w_0()
+        .child(
+            div()
+                .id(SharedString::from(format!("yt-history-{name}-open")))
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(8.0))
+                .py(px(5.0))
+                .rounded(rems(RADIUS_MD))
+                .border_1()
+                .border_color(if open { colors.ring } else { colors.border })
+                .bg(colors.input)
+                .cursor_pointer()
+                .text_size(rems(TEXT_XS))
+                .text_color(if chosen.is_some() {
+                    colors.foreground
+                } else {
+                    colors.muted_foreground
+                })
+                .child(
+                    gpui::svg()
+                        .size(px(13.0))
+                        .flex_shrink_0()
+                        .path(crate::assets::icon("calendar04"))
+                        .text_color(colors.muted_foreground),
+                )
+                .child(match chosen {
+                    Some(when) => when.label(),
+                    None => t("youtube.history.date.any"),
+                })
+                .on_click(cx.listener(move |this: &mut V, _, _, cx| {
+                    if let Some(filters) = this.youtube().filters.as_mut() {
+                        filters.toggle_picker(edge, now);
+                    }
+                    cx.notify();
+                })),
+        );
+
+    if chosen.is_some() {
+        row = row.child(
+            div()
+                .id(SharedString::from(format!("yt-history-{name}-clear")))
+                .size(px(22.0))
+                .flex()
+                .flex_shrink_0()
+                .items_center()
+                .justify_center()
+                .rounded(rems(RADIUS_SM))
+                .cursor_pointer()
+                .bg(opacity(colors.accent, 0.5))
+                .child(
+                    gpui::svg()
+                        .size(px(10.0))
+                        .path(crate::assets::icon("cancel01"))
+                        .text_color(colors.muted_foreground),
+                )
+                .on_click(cx.listener(move |this: &mut V, _, _, cx| {
+                    if let Some(filters) = this.youtube().filters.as_mut() {
+                        *filters.edge_mut(edge) = None;
+                        if filters.open == Some(edge) {
+                            filters.open = None;
+                        }
+                    }
+                    cx.notify();
+                })),
+        );
+    }
+
+    row
+}
+
+fn filter_calendar<V: Host>(
+    colors: Palette,
+    filters: &Filters,
+    edge: Edge,
+    cx: &mut Context<V>,
+) -> Option<Div> {
+    let when = filters.edge(edge).filter(|_| filters.open == Some(edge))?;
+    let name = match edge {
+        Edge::From => "from",
+        Edge::To => "to",
+    };
+
+    let heading_row = div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .w_full()
+        .child(filter_stepper(
+            format!("yt-history-{name}-prev"),
+            colors,
+            "chevron-left",
+            edge,
+            |when| {
+                let (year, month) = crate::calendar::previous_month(when.year, when.month);
+                *when = when.with_month(year, month);
+            },
+            cx,
+        ))
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(rems(TEXT_XS))
+                .text_color(colors.foreground)
+                .child(format!(
+                    "{} {}",
+                    t(&crate::calendar::month_key(when.month)),
+                    when.year
+                )),
+        )
+        .child(filter_stepper(
+            format!("yt-history-{name}-next"),
+            colors,
+            "chevron-right",
+            edge,
+            |when| {
+                let (year, month) = crate::calendar::next_month(when.year, when.month);
+                *when = when.with_month(year, month);
+            },
+            cx,
+        ));
+
+    let weekdays = div().flex().w_full().gap(px(2.0)).children(
+        (0..7)
+            .map(|index| {
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(rems(TEXT_XS))
+                    .text_color(colors.muted_foreground)
+                    .child(t(&crate::calendar::weekday_key(index)))
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    let grid = crate::calendar::month_grid(when.year, when.month);
+    let mut rows = Vec::new();
+    for week in grid.chunks(7) {
+        let mut row = div().flex().w_full().gap(px(2.0));
+        for slot in week {
+            row = match slot {
+                Some(day) => row.child(filter_day(
+                    format!("yt-history-{name}-day-{day}"),
+                    colors,
+                    *day,
+                    *day == when.day,
+                    edge,
+                    cx,
+                )),
+                None => row.child(div().flex_1().h(px(26.0))),
+            };
+        }
+        rows.push(row);
+    }
+
+    let clock = div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .w_full()
+        .child(label(colors, t("youtube.publish.schedule.time")))
+        .child(div().flex_1())
+        .child(filter_stepper(
+            format!("yt-history-{name}-hour-down"),
+            colors,
+            "arrow-down",
+            edge,
+            |when| when.hour = (when.hour + 23) % 24,
+            cx,
+        ))
+        .child(
+            div()
+                .w(px(46.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(rems(TEXT_XS))
+                .text_color(colors.foreground)
+                .child(format!("{:02}:{:02}", when.hour, when.minute)),
+        )
+        .child(filter_stepper(
+            format!("yt-history-{name}-hour-up"),
+            colors,
+            "arrow-down",
+            edge,
+            |when| when.hour = (when.hour + 1) % 24,
+            cx,
+        ))
+        .child(filter_stepper(
+            format!("yt-history-{name}-minute"),
+            colors,
+            "plus-sign",
+            edge,
+            |when| when.minute = (when.minute + 5) % 60,
+            cx,
+        ));
+
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .w_full()
+            .p(px(8.0))
+            .rounded(rems(RADIUS_MD))
+            .border_1()
+            .border_color(colors.border)
+            .bg(opacity(colors.accent, 0.25))
+            .child(heading_row)
+            .child(weekdays)
+            .children(rows)
+            .child(clock),
+    )
 }
 
 pub fn schedule_picker<V: Host>(
@@ -1093,6 +1411,7 @@ pub fn history_row<V: Host>(
 pub fn history_filters<V: Host>(
     state: &Youtube,
     colors: Palette,
+    now: i64,
     window: &Window,
     cx: &mut Context<V>,
 ) -> Div {
@@ -1137,11 +1456,13 @@ pub fn history_filters<V: Host>(
         .gap(px(6.0))
         .w_full()
         .child(input(
-            "yt-history-search",
-            &filters.search,
-            colors,
-            field_style(t("youtube.history.search")),
-            None,
+            InputSpec {
+                id: "yt-history-search".into(),
+                field: &filters.search,
+                colors,
+                style: field_style(t("youtube.history.search")),
+                submit: None,
+            },
             |state| state.filters.as_mut().map(|filters| &mut filters.search),
             window,
             cx,
@@ -1151,29 +1472,14 @@ pub fn history_filters<V: Host>(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
+                .w_full()
                 .child(label(colors, t("youtube.history.from")))
-                .child(div().flex_1().child(input(
-                    "yt-history-from",
-                    &filters.from,
-                    colors,
-                    field_style(t("youtube.history.date.placeholder")),
-                    None,
-                    |state| state.filters.as_mut().map(|filters| &mut filters.from),
-                    window,
-                    cx,
-                )))
+                .child(filter_date_button(colors, filters, Edge::From, now, cx))
                 .child(label(colors, t("youtube.history.to")))
-                .child(div().flex_1().child(input(
-                    "yt-history-to",
-                    &filters.to,
-                    colors,
-                    field_style(t("youtube.history.date.placeholder")),
-                    None,
-                    |state| state.filters.as_mut().map(|filters| &mut filters.to),
-                    window,
-                    cx,
-                ))),
+                .child(filter_date_button(colors, filters, Edge::To, now, cx)),
         )
+        .children(filter_calendar(colors, filters, Edge::From, cx))
+        .children(filter_calendar(colors, filters, Edge::To, cx))
         .child(label(colors, t("youtube.history.accounts")))
         .child(div().flex().flex_wrap().gap(px(8.0)).children(boxes))
         .child(chip(
@@ -1190,10 +1496,51 @@ pub fn history_filters<V: Host>(
         ))
 }
 
+fn add_account_button<V: Host>(colors: Palette, busy: bool, cx: &mut Context<V>) -> Stateful<Div> {
+    let tint = if busy {
+        colors.muted_foreground
+    } else {
+        colors.foreground
+    };
+    div()
+        .id("yt-account-add")
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(10.0))
+        .py(px(6.0))
+        .rounded(rems(RADIUS_MD))
+        .border_1()
+        .border_color(colors.border)
+        .bg(opacity(colors.accent, 0.45))
+        .cursor_pointer()
+        .text_size(rems(TEXT_XS))
+        .text_color(tint)
+        .child(
+            gpui::svg()
+                .size(px(12.0))
+                .flex_shrink_0()
+                .path(crate::assets::icon("plus-sign"))
+                .text_color(tint),
+        )
+        .child(t(if busy {
+            "youtube.accounts.signingIn"
+        } else {
+            "youtube.accounts.add"
+        }))
+        .on_click(cx.listener(move |this: &mut V, _, _, cx| {
+            if !busy {
+                this.youtube_action(Action::AddAccount, cx);
+            }
+            cx.notify();
+        }))
+}
+
 pub fn settings_body<V: Host>(
     state: &mut Youtube,
     colors: Palette,
-    _now: i64,
+    now: i64,
     window: &Window,
     cx: &mut Context<V>,
 ) -> Div {
@@ -1240,18 +1587,11 @@ pub fn settings_body<V: Host>(
         body = body.child(div().flex().flex_col().gap(px(2.0)).children(rows));
     }
 
-    body = body.child(action_chip(
-        "yt-account-add",
+    body = body.child(div().flex().w_full().child(add_account_button(
         colors,
-        t(if state.signing_in {
-            "youtube.accounts.signingIn"
-        } else {
-            "youtube.accounts.add"
-        }),
-        !state.signing_in,
-        Action::AddAccount,
+        state.signing_in,
         cx,
-    ));
+    )));
 
     if let Some(notice) = state.notice.clone() {
         body = body.child(
@@ -1291,7 +1631,7 @@ pub fn settings_body<V: Host>(
 
     let entries: Vec<HistoryEntry> = state.filtered().into_iter().cloned().collect();
     body = body
-        .child(history_filters(state, colors, window, cx))
+        .child(history_filters(state, colors, now, window, cx))
         .child(label(
             colors,
             t_args(
@@ -1340,13 +1680,6 @@ pub fn sign_in_dialog<V: Host>(
         panel = panel
             .child(progress_bar(colors, 0.5))
             .child(label(colors, t("youtube.signIn.waitingHint")));
-    } else {
-        panel = panel.child(note(
-            colors,
-            t("youtube.signIn.privacy.title"),
-            t("youtube.signIn.privacy.body"),
-            false,
-        ));
     }
 
     if !ready {
@@ -1460,22 +1793,26 @@ fn advanced_fields<V: Host>(
         .gap(px(8.0))
         .child(label(colors, t("youtube.publish.playlists")))
         .child(input(
-            "yt-form-playlists",
-            &form.playlists,
-            colors,
-            field_style(t("youtube.publish.playlists.placeholder")),
-            None,
+            InputSpec {
+                id: "yt-form-playlists".into(),
+                field: &form.playlists,
+                colors,
+                style: field_style(t("youtube.publish.playlists.placeholder")),
+                submit: None,
+            },
             |state| state.form.as_mut().map(|form| &mut form.playlists),
             window,
             cx,
         ))
         .child(label(colors, t("youtube.publish.language")))
         .child(input(
-            "yt-form-language",
-            &form.video_language,
-            colors,
-            field_style(t("youtube.publish.language.placeholder")),
-            None,
+            InputSpec {
+                id: "yt-form-language".into(),
+                field: &form.video_language,
+                colors,
+                style: field_style(t("youtube.publish.language.placeholder")),
+                submit: None,
+            },
             |state| state.form.as_mut().map(|form| &mut form.video_language),
             window,
             cx,
@@ -1940,7 +2277,14 @@ pub fn session_dialog<V: Host>(
 ) -> Option<Div> {
     let waiting = !state.queue.visible().is_empty();
     if state.session.is_empty() && state.running.is_empty() && !waiting && state.notice.is_none() {
+        state.dismissed = false;
         return None;
+    }
+    if state.dismissed {
+        if state.session.is_empty() && state.notice.is_none() {
+            return None;
+        }
+        state.dismissed = false;
     }
     if state.form.is_some() || state.published.is_some() || state.choosing_account {
         return None;
@@ -2248,38 +2592,44 @@ pub fn publish_dialog<V: Host>(
         .gap(px(6.0))
         .child(label(colors, t("youtube.publish.title")))
         .child(input(
-            "yt-form-title",
-            &form.title,
-            colors,
-            field_style(t("youtube.publish.title.placeholder")),
-            None,
+            InputSpec {
+                id: "yt-form-title".into(),
+                field: &form.title,
+                colors,
+                style: field_style(t("youtube.publish.title.placeholder")),
+                submit: None,
+            },
             |state| state.form.as_mut().map(|form| &mut form.title),
             window,
             cx,
         ))
         .child(label(colors, t("youtube.publish.description")))
         .child(input(
-            "yt-form-description",
-            &form.description,
-            colors,
-            FieldStyle {
-                height: 132.0,
-                multiline: true,
-                placeholder: SharedString::from(t("youtube.publish.description.placeholder")),
-                ..FieldStyle::default()
+            InputSpec {
+                id: "yt-form-description".into(),
+                field: &form.description,
+                colors,
+                style: FieldStyle {
+                    height: 132.0,
+                    multiline: true,
+                    placeholder: SharedString::from(t("youtube.publish.description.placeholder")),
+                    ..FieldStyle::default()
+                },
+                submit: None,
             },
-            None,
             |state| state.form.as_mut().map(|form| &mut form.description),
             window,
             cx,
         ))
         .child(label(colors, t("youtube.publish.tags")))
         .child(input(
-            "yt-form-tags",
-            &form.tags,
-            colors,
-            field_style(t("youtube.publish.tags.placeholder")),
-            None,
+            InputSpec {
+                id: "yt-form-tags".into(),
+                field: &form.tags,
+                colors,
+                style: field_style(t("youtube.publish.tags.placeholder")),
+                submit: None,
+            },
             |state| state.form.as_mut().map(|form| &mut form.tags),
             window,
             cx,
@@ -2425,19 +2775,15 @@ pub fn publish_dialog<V: Host>(
                         .items_center()
                         .justify_center()
                         .child(match form.poster.clone() {
-                            Some(image) => gpui::AnyElement::from(
-                                gpui::img(image)
-                                    .size_full()
-                                    .object_fit(gpui::ObjectFit::Contain)
-                                    .into_any_element(),
-                            ),
-                            None => gpui::AnyElement::from(
-                                gpui::svg()
-                                    .size(px(32.0))
-                                    .path(crate::assets::icon("oc-video"))
-                                    .text_color(opacity(gpui::white(), 0.4))
-                                    .into_any_element(),
-                            ),
+                            Some(image) => gpui::img(image)
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Contain)
+                                .into_any_element(),
+                            None => gpui::svg()
+                                .size(px(32.0))
+                                .path(crate::assets::icon("oc-video"))
+                                .text_color(opacity(gpui::white(), 0.4))
+                                .into_any_element(),
                         }),
                 )
                 .child(
@@ -2561,25 +2907,21 @@ pub fn publish_dialog<V: Host>(
                 .items_center()
                 .gap(px(8.0))
                 .child(match avatar {
-                    Some(image) => gpui::AnyElement::from(
-                        gpui::img(image)
-                            .size(px(24.0))
-                            .rounded_full()
-                            .into_any_element(),
-                    ),
-                    None => gpui::AnyElement::from(
-                        div()
-                            .size(px(24.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .bg(colors.muted)
-                            .text_size(rems(TEXT_XS))
-                            .text_color(colors.foreground)
-                            .child(channel_initials)
-                            .into_any_element(),
-                    ),
+                    Some(image) => gpui::img(image)
+                        .size(px(24.0))
+                        .rounded_full()
+                        .into_any_element(),
+                    None => div()
+                        .size(px(24.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(colors.muted)
+                        .text_size(rems(TEXT_XS))
+                        .text_color(colors.foreground)
+                        .child(channel_initials)
+                        .into_any_element(),
                 })
                 .child(
                     div()

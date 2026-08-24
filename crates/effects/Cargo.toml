@@ -1,0 +1,24 @@
+[package]
+name = "effects"
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/effects.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+gpu = { version = "0.1.0", path = "../gpu" }
+thiserror = { workspace = true }
+wgpu = "29.0.1"
+
+[dev-dependencies]
+pollster = "0.4.0"
+naga = { version = "29.0.1", features = ["wgsl-in"] }
+
+[lints]
+workspace = true

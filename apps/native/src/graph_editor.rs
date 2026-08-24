@@ -270,16 +270,22 @@ pub struct CurvePatch {
     pub right_handle: Option<Option<Handle>>,
 }
 
+/// One end of a keyframe segment: which keyframe it is, when, and at what value.
+#[derive(Clone, Copy, Debug)]
+pub struct SegmentEnd<'id> {
+    pub keyframe_id: &'id str,
+    pub tick: i64,
+    pub value: f64,
+}
+
 pub fn build_curve_patches(
-    left_id: &str,
-    left_tick: i64,
-    left_value: f64,
-    right_id: &str,
-    right_tick: i64,
-    right_value: f64,
+    left: SegmentEnd<'_>,
+    right: SegmentEnd<'_>,
     curve: Curve,
     reference_span_value: Option<f64>,
 ) -> Option<Vec<CurvePatch>> {
+    let (left_id, left_tick, left_value) = (left.keyframe_id, left.tick, left.value);
+    let (right_id, right_tick, right_value) = (right.keyframe_id, right.tick, right.value);
     if is_linear_curve(curve) {
         return Some(vec![
             CurvePatch {
@@ -353,7 +359,7 @@ impl Axis {
         }
     }
 
-    pub fn to_px(&self, value: f64) -> f32 {
+    pub fn to_px(self, value: f64) -> f32 {
         let fraction = ((value - self.min) / self.span()) as f32;
         let fraction = if self.invert {
             1.0 - fraction
@@ -363,7 +369,7 @@ impl Axis {
         self.pad + fraction * self.usable()
     }
 
-    pub fn to_value(&self, px: f32) -> f64 {
+    pub fn to_value(self, px: f32) -> f64 {
         let fraction = ((px - self.pad) / self.usable()) as f64;
         let fraction = if self.invert {
             1.0 - fraction
@@ -391,16 +397,28 @@ pub fn drag_keyframe(
     (tick, value)
 }
 
-pub fn eval_segment(
-    left_tick: i64,
-    left_value: f64,
-    right_tick: i64,
-    right_value: f64,
-    segment_to_next: &str,
-    left_right_handle: Option<Handle>,
-    right_left_handle: Option<Handle>,
-    tick: i64,
-) -> f64 {
+/// A segment between two keyframes, with the easing that joins them.
+#[derive(Clone, Copy, Debug)]
+pub struct Segment {
+    pub left_tick: i64,
+    pub left_value: f64,
+    pub right_tick: i64,
+    pub right_value: f64,
+    /// The handle leaving the left keyframe, for a bezier segment.
+    pub left_right_handle: Option<Handle>,
+    /// The handle arriving at the right keyframe, for a bezier segment.
+    pub right_left_handle: Option<Handle>,
+}
+
+pub fn eval_segment(segment: Segment, segment_to_next: &str, tick: i64) -> f64 {
+    let Segment {
+        left_tick,
+        left_value,
+        right_tick,
+        right_value,
+        left_right_handle,
+        right_left_handle,
+    } = segment;
     let span = (right_tick - left_tick) as f64;
     if span == 0.0 {
         return right_value;
@@ -596,7 +614,18 @@ mod tests {
         for step in 0..=10 {
             let t = step as f64 / 10.0;
             let tick = (t * rt as f64).round() as i64;
-            let got = eval_segment(lt, lv, rt, rv, "bezier", None, None, tick);
+            let got = eval_segment(
+                Segment {
+                    left_tick: lt,
+                    left_value: lv,
+                    right_tick: rt,
+                    right_value: rv,
+                    left_right_handle: None,
+                    right_left_handle: None,
+                },
+                "bezier",
+                tick,
+            );
             let want = lv + (rv - lv) * t;
             assert!((got - want).abs() < 1e-2, "t={t}: {got} vs {want}");
         }
@@ -617,7 +646,18 @@ mod tests {
         for step in 0..=20 {
             let t = step as f64 / 20.0;
             let tick = (t * rt as f64).round() as i64;
-            let got = eval_segment(0, 0.0, rt, rv, "bezier", Some(rh), Some(lh), tick);
+            let got = eval_segment(
+                Segment {
+                    left_tick: 0,
+                    left_value: 0.0,
+                    right_tick: rt,
+                    right_value: rv,
+                    left_right_handle: Some(rh),
+                    right_left_handle: Some(lh),
+                },
+                "bezier",
+                tick,
+            );
             let want = ease(
                 [
                     curve[0] as f32,
@@ -641,7 +681,21 @@ mod tests {
 
     #[test]
     fn a_linear_curve_clears_handles() {
-        let patches = build_curve_patches("a", 0, 0.0, "b", 1000, 1.0, LINEAR_CURVE, None).unwrap();
+        let patches = build_curve_patches(
+            SegmentEnd {
+                keyframe_id: "a",
+                tick: 0,
+                value: 0.0,
+            },
+            SegmentEnd {
+                keyframe_id: "b",
+                tick: 1000,
+                value: 1.0,
+            },
+            LINEAR_CURVE,
+            None,
+        )
+        .unwrap();
         assert_eq!(patches[0].segment_to_next, Some("linear"));
         assert_eq!(patches[0].right_handle, Some(None));
         assert_eq!(patches[1].left_handle, Some(None));
@@ -650,7 +704,21 @@ mod tests {
     #[test]
     fn a_bezier_curve_stores_solved_handles() {
         let curve: Curve = [0.25, 0.1, 0.25, 1.0];
-        let patches = build_curve_patches("a", 0, 0.0, "b", 120_000, 200.0, curve, None).unwrap();
+        let patches = build_curve_patches(
+            SegmentEnd {
+                keyframe_id: "a",
+                tick: 0,
+                value: 0.0,
+            },
+            SegmentEnd {
+                keyframe_id: "b",
+                tick: 120_000,
+                value: 200.0,
+            },
+            curve,
+            None,
+        )
+        .unwrap();
         assert_eq!(patches[0].segment_to_next, Some("bezier"));
         let Some(Some(rh)) = patches[0].right_handle else {
             panic!("no right handle");

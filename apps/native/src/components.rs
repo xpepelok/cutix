@@ -1,10 +1,17 @@
-#![allow(dead_code)]
-
-use gpui::{div, prelude::*, px, Div, FontWeight, Hsla, SharedString, Stateful, StyleRefinement};
+use gpui::{
+    div, prelude::*, px, App, Div, FontWeight, Hsla, SharedString, Stateful, StyleRefinement,
+    Window,
+};
 
 use crate::assets::icon;
 use crate::interaction::{mix, OverlayFrame, OverlaySide};
 use crate::theme::{opacity, rem, Palette, RADIUS_MD, RADIUS_SM, TEXT_SM};
+
+/// A GPUI listener for a hover state change, ready to hand to `on_hover`.
+pub type HoverHandler = Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
+
+/// A GPUI listener for a mouse-down, ready to hand to `on_mouse_down`.
+pub type PressHandler = Box<dyn Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 pub const BUTTON_GAP_PX: f32 = 8.0;
 pub const BUTTON_ICON_PX: f32 = 16.0;
@@ -18,12 +25,10 @@ pub enum ButtonVariant {
     Background,
     Destructive,
     DestructiveForeground,
-    Caution,
     Outline,
     Secondary,
     Text,
     Ghost,
-    Link,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,12 +108,6 @@ pub fn button_surface(
             border: Some(colors.border),
             opacity: 1.0,
         },
-        ButtonVariant::Caution => Surface {
-            fill: mix(transparent, opacity(colors.caution, 0.1), hover),
-            text: colors.caution,
-            border: None,
-            opacity: 1.0,
-        },
         ButtonVariant::Outline => Surface {
             fill: mix(colors.background, colors.accent, hover),
             text: colors.foreground,
@@ -130,12 +129,6 @@ pub fn button_surface(
         ButtonVariant::Ghost => Surface {
             fill: mix(transparent, colors.accent, hover),
             text: colors.foreground,
-            border: None,
-            opacity: 1.0,
-        },
-        ButtonVariant::Link => Surface {
-            fill: transparent,
-            text: colors.primary,
             border: None,
             opacity: 1.0,
         },
@@ -204,11 +197,6 @@ impl Button {
         self
     }
 
-    pub fn trailing(mut self, name: &str) -> Self {
-        self.trailing = Some(icon(name));
-        self
-    }
-
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
         self
@@ -236,7 +224,10 @@ impl Button {
         } else {
             root = root
                 .cursor_pointer()
-                .active(|style| style.opacity(PRESSED_OPACITY));
+                .active(|style| style.opacity(PRESSED_OPACITY))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {
+                    crate::cues::play(crate::cues::Cue::Click);
+                });
         }
 
         if self.variant != ButtonVariant::Text {
@@ -284,20 +275,6 @@ impl Styled for Button {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
     }
-}
-
-pub fn icon_button(
-    id: impl Into<SharedString>,
-    name: &str,
-    colors: Palette,
-    variant: ButtonVariant,
-    hover: f32,
-) -> Button {
-    Button::new(id, colors)
-        .variant(variant)
-        .size(ButtonSize::Icon)
-        .hover(hover)
-        .icon(name)
 }
 
 pub fn separator_h(colors: Palette) -> Div {
@@ -373,7 +350,6 @@ pub fn tooltipped(
 
 pub const MENU_MIN_WIDTH_PX: f32 = 128.0;
 pub const MENU_PAD_PX: f32 = 4.0;
-pub const MENU_ITEM_PAD_Y_PX: f32 = 6.0;
 pub const MENU_ITEM_PAD_X_PX: f32 = 10.0;
 pub const MENU_OFFSET_PX: f32 = 4.0;
 pub const MENU_ITEM_TEXT_OPACITY: f32 = 0.85;
@@ -405,6 +381,9 @@ pub fn menu_action(
 
     div()
         .id(id.into())
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, _| {
+            crate::cues::play(crate::cues::Cue::Toggle);
+        })
         .flex()
         .w_full()
         .h(px(MENU_ITEM_HEIGHT_PX))
@@ -480,37 +459,6 @@ pub struct MenuPlacement {
     pub width: f32,
     pub height: f32,
     pub opacity: f32,
-}
-
-pub fn place_menu(
-    frame: OverlayFrame,
-    side: OverlaySide,
-    natural: (f32, f32),
-    anchor: (f32, f32),
-) -> MenuPlacement {
-    let (natural_w, natural_h) = natural;
-    let (origin_x, origin_y) = side.origin();
-    let width = natural_w * frame.scale;
-    let height = natural_h * frame.scale;
-
-    let slide_y = match side {
-        OverlaySide::Bottom => frame.offset,
-        OverlaySide::Top => -frame.offset,
-        _ => 0.0,
-    };
-    let slide_x = match side {
-        OverlaySide::Right => frame.offset,
-        OverlaySide::Left => -frame.offset,
-        _ => 0.0,
-    };
-
-    MenuPlacement {
-        left: anchor.0 + (natural_w - width) * origin_x + slide_x,
-        top: anchor.1 + (natural_h - height) * origin_y + slide_y,
-        width,
-        height,
-        opacity: frame.opacity,
-    }
 }
 
 pub fn place_anchored(
@@ -597,17 +545,47 @@ pub fn overlay_backdrop(id: impl Into<SharedString>) -> Stateful<Div> {
         .h(px(16000.0))
 }
 
-pub fn aspect_fit(element: Div, ratio: f32) -> Div {
-    let mut element = element.w_full().h_full();
-    let style = element.style();
-    style.aspect_ratio = Some(ratio);
-    style.max_size.width = Some(gpui::relative(1.0).into());
-    style.max_size.height = Some(gpui::relative(1.0).into());
-    element
-}
-
 pub fn menu_natural_height(items: usize, item_height: f32) -> f32 {
     items as f32 * item_height + MENU_PAD_PX * 2.0 + 2.0
+}
+
+/// Only the tests in this file ask for this; compiled for them alone so the shipping
+/// binary does not carry something nothing calls.
+#[cfg(test)]
+pub const MENU_ITEM_PAD_Y_PX: f32 = 6.0;
+
+/// Only the tests in this file ask for this; compiled for them alone so the shipping
+/// binary does not carry something nothing calls.
+#[cfg(test)]
+pub fn place_menu(
+    frame: OverlayFrame,
+    side: OverlaySide,
+    natural: (f32, f32),
+    anchor: (f32, f32),
+) -> MenuPlacement {
+    let (natural_w, natural_h) = natural;
+    let (origin_x, origin_y) = side.origin();
+    let width = natural_w * frame.scale;
+    let height = natural_h * frame.scale;
+
+    let slide_y = match side {
+        OverlaySide::Bottom => frame.offset,
+        OverlaySide::Top => -frame.offset,
+        _ => 0.0,
+    };
+    let slide_x = match side {
+        OverlaySide::Right => frame.offset,
+        OverlaySide::Left => -frame.offset,
+        _ => 0.0,
+    };
+
+    MenuPlacement {
+        left: anchor.0 + (natural_w - width) * origin_x + slide_x,
+        top: anchor.1 + (natural_h - height) * origin_y + slide_y,
+        width,
+        height,
+        opacity: frame.opacity,
+    }
 }
 
 #[cfg(test)]
