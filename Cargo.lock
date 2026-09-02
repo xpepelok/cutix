@@ -1484,7 +1484,7 @@ checksum = "e2931af7e13dc045d8e9d26afccc6fa115d64e115c9c84b1166288b46f6782c2"
 
 [[package]]
 name = "cutix"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "audio",
  "capcut",
