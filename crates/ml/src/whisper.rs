@@ -1,6 +1,5 @@
 use std::fs;
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Value;
@@ -9,6 +8,9 @@ use crate::MlError;
 use crate::mel::{self, CHUNK_FRAMES, CHUNK_SAMPLES, MelExtractor, N_MELS, SAMPLE_RATE};
 use crate::models::cache_directory;
 use crate::tokenizer::Tokenizer;
+
+/// Whisper always sees 30-second windows; chunk offsets and open-ended segments use it.
+const CHUNK_SECONDS: f64 = 30.0;
 
 pub struct WhisperSpec {
     pub key: &'static str,
@@ -102,56 +104,11 @@ pub fn whisper_cached_size_bytes(spec: &WhisperSpec) -> u64 {
 
 pub fn download_file(
     url: &str,
-    target: &PathBuf,
+    target: &Path,
     on_progress: &mut dyn FnMut(f32),
     should_cancel: &dyn Fn() -> bool,
 ) -> Result<(), MlError> {
-    let directory = target.parent().ok_or_else(|| {
-        MlError::Download(format!("{} has no parent directory", target.display()))
-    })?;
-    fs::create_dir_all(directory)
-        .map_err(|error| MlError::Download(format!("create {}: {error}", directory.display())))?;
-
-    let response = ureq::get(url)
-        .call()
-        .map_err(|error| MlError::Download(format!("GET {url}: {error}")))?;
-    let total = response
-        .header("Content-Length")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-
-    let partial = target.with_extension("part");
-    let mut file = fs::File::create(&partial)
-        .map_err(|error| MlError::Download(format!("create {}: {error}", partial.display())))?;
-    let mut reader = response.into_reader();
-    let mut buffer = vec![0u8; 256 * 1024];
-    let mut written = 0u64;
-
-    loop {
-        if should_cancel() {
-            drop(file);
-            let _ = fs::remove_file(&partial);
-            return Err(MlError::Cancelled);
-        }
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|error| MlError::Download(format!("read {url}: {error}")))?;
-        if read == 0 {
-            break;
-        }
-        file.write_all(&buffer[..read])
-            .map_err(|error| MlError::Download(format!("write {}: {error}", partial.display())))?;
-        written += read as u64;
-        if total > 0 {
-            on_progress((written as f32 / total as f32).clamp(0.0, 1.0));
-        }
-    }
-
-    drop(file);
-    fs::rename(&partial, target)
-        .map_err(|error| MlError::Download(format!("rename {}: {error}", partial.display())))?;
-    on_progress(1.0);
-    Ok(())
+    crate::download::download_to(url, target, on_progress, should_cancel)
 }
 
 pub fn ensure_whisper_downloaded(
@@ -224,6 +181,11 @@ pub fn timestamp_token_seconds(token: u32, timestamp_begin: u32) -> Option<f64> 
     Some((token - timestamp_begin) as f64 * 0.02)
 }
 
+/// Turns decoded tokens into segments. Whisper normally brackets text with a pair of
+/// timestamps, but it also emits text before the first timestamp, a single shared
+/// timestamp between two segments, or trailing text with no closing timestamp.
+/// None of that is dropped: text runs from the most recent timestamp (or the chunk
+/// start) to the next one (or the chunk end).
 pub fn assemble_segments(
     tokens: &[u32],
     timestamp_begin: u32,
@@ -231,42 +193,37 @@ pub fn assemble_segments(
     decode: &dyn Fn(&[u32]) -> String,
 ) -> Vec<TranscriptSegment> {
     let mut segments = Vec::new();
-    let mut start: Option<f64> = None;
+    let mut last_timestamp = 0.0;
     let mut buffer: Vec<u32> = Vec::new();
 
-    for token in tokens {
-        match timestamp_token_seconds(*token, timestamp_begin) {
-            Some(seconds) => match start {
-                None => {
-                    start = Some(seconds);
-                    buffer.clear();
-                }
-                Some(begin) => {
-                    let text = decode(&buffer).trim().to_string();
-                    if !text.is_empty() {
-                        segments.push(TranscriptSegment {
-                            text,
-                            start: offset + begin,
-                            end: offset + seconds.max(begin),
-                        });
-                    }
-                    buffer.clear();
-                    start = None;
-                }
-            },
-            None => buffer.push(*token),
-        }
-    }
-
-    if let Some(begin) = start {
-        let text = decode(&buffer).trim().to_string();
+    let mut flush = |buffer: &mut Vec<u32>, begin: f64, end: f64| {
+        let text = decode(buffer).trim().to_string();
+        buffer.clear();
         if !text.is_empty() {
             segments.push(TranscriptSegment {
                 text,
                 start: offset + begin,
-                end: offset + 30.0,
+                end: offset + end.max(begin),
             });
         }
+    };
+
+    for token in tokens {
+        match timestamp_token_seconds(*token, timestamp_begin) {
+            Some(seconds) => {
+                // An empty buffer means this timestamp opens a segment (or repeats the
+                // closing one); otherwise it closes the text since the last timestamp.
+                if !buffer.is_empty() {
+                    flush(&mut buffer, last_timestamp, seconds);
+                }
+                last_timestamp = seconds;
+            }
+            None => buffer.push(*token),
+        }
+    }
+
+    if !buffer.is_empty() {
+        flush(&mut buffer, last_timestamp, CHUNK_SECONDS);
     }
 
     segments
@@ -495,6 +452,15 @@ pub fn transcribe(
                 *value = f32::MIN;
             }
 
+            // Timestamp mode must open with a timestamp token; letting plain text come
+            // first leaves it without a start time and drifts every later segment.
+            if tokens.len() == prompt_length {
+                let text_end = (model.specials.timestamp_begin as usize).min(logits.len());
+                for value in logits[..text_end].iter_mut() {
+                    *value = f32::MIN;
+                }
+            }
+
             let next = argmax_range(&logits, 0, logits.len());
             if next == model.specials.end_of_text {
                 break;
@@ -514,7 +480,7 @@ pub fn transcribe(
         segments.extend(assemble_segments(
             &tokens[prompt_length..],
             model.specials.timestamp_begin,
-            chunk as f64 * 30.0,
+            chunk as f64 * CHUNK_SECONDS,
             &decode,
         ));
 
@@ -620,6 +586,65 @@ mod tests {
         let segments = assemble_segments(&tokens, 50364, 0.0, &fake_decode);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "hello");
+    }
+
+    #[test]
+    fn text_before_the_first_timestamp_starts_at_the_chunk_start() {
+        let tokens = [1, 2, 50414, 50414, 3, 50464];
+        let segments = assemble_segments(&tokens, 50364, 30.0, &fake_decode);
+        assert_eq!(
+            segments,
+            vec![
+                TranscriptSegment {
+                    text: "hello world".to_string(),
+                    start: 30.0,
+                    end: 31.0,
+                },
+                TranscriptSegment {
+                    text: "again".to_string(),
+                    start: 31.0,
+                    end: 32.0,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_single_shared_timestamp_splits_consecutive_segments() {
+        let tokens = [50364, 1, 50414, 2, 50464];
+        let segments = assemble_segments(&tokens, 50364, 0.0, &fake_decode);
+        assert_eq!(segments.len(), 2);
+        assert_eq!((segments[0].start, segments[0].end), (0.0, 1.0));
+        assert_eq!(segments[1].text, "world");
+        assert_eq!((segments[1].start, segments[1].end), (1.0, 2.0));
+    }
+
+    #[test]
+    fn text_after_the_last_timestamp_runs_to_the_chunk_end() {
+        let tokens = [50364, 1, 50414, 50414, 2, 3];
+        let segments = assemble_segments(&tokens, 50364, 0.0, &fake_decode);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[1].text, "world again");
+        assert_eq!((segments[1].start, segments[1].end), (1.0, 30.0));
+    }
+
+    #[test]
+    fn text_without_any_timestamp_spans_the_whole_chunk() {
+        let segments = assemble_segments(&[1, 2], 50364, 60.0, &fake_decode);
+        assert_eq!(
+            segments,
+            vec![TranscriptSegment {
+                text: "hello world".to_string(),
+                start: 60.0,
+                end: 90.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn no_tokens_produce_no_segments() {
+        assert!(assemble_segments(&[], 50364, 0.0, &fake_decode).is_empty());
+        assert!(assemble_segments(&[50364, 50414], 50364, 0.0, &fake_decode).is_empty());
     }
 
     #[test]

@@ -13,8 +13,12 @@ fn main() {
             Ok(draft) => {
                 println!("\n--- {}", draft.name);
                 println!(
-                    "canvas: {}x{} | fps: {} | dur: {:.2}",
-                    draft.canvas.0, draft.canvas.1, draft.fps, draft.duration_seconds
+                    "canvas: {}x{} | fps: {}/{} | dur: {:.2}",
+                    draft.canvas.0,
+                    draft.canvas.1,
+                    draft.fps.numerator,
+                    draft.fps.denominator,
+                    draft.duration_seconds
                 );
                 println!(
                     "media: {} | texts: {} | stickers: {}",

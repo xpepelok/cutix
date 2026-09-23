@@ -230,13 +230,24 @@ impl FrameDuration {
         i64::try_from(round_div_i128(scaled, i128::from(self.ticks_denominator))).ok()
     }
 
-    /// The index of the frame that is on screen at `ticks`, rounding down.
+    /// The index of the frame that is on screen at `ticks`: the last frame whose start,
+    /// as [`FrameDuration::ticks_at_frame`] places it, is at or before `ticks`.
+    ///
+    /// Frame starts are rounded to the nearest tick, so this is the exact inverse of that
+    /// rounding rather than a plain floor of `ticks / frame`. A plain floor lands one frame
+    /// early whenever a start was rounded down onto `ticks` — frame 4 of 7 fps starts at
+    /// tick 68 571 (68 571.43 rounded), yet a plain floor puts that tick in frame 3.
     ///
     /// Negative tick positions floor towards negative infinity, so frame boundaries stay
     /// evenly spaced on both sides of zero.
     pub fn frame_floor(self, ticks: i64) -> Option<i64> {
-        let scaled = i128::from(ticks).checked_mul(i128::from(self.ticks_denominator))?;
-        i64::try_from(scaled.div_euclid(i128::from(self.ticks_numerator))).ok()
+        // `ticks_at_frame(n) = floor((2nN + D) / 2D)`, which is at most `ticks` exactly
+        // when `2nN < 2D·ticks + D`. The largest such `n` is `floor((2D·ticks + D - 1) / 2N)`.
+        let denominator = i128::from(self.ticks_denominator);
+        let limit = i128::from(ticks)
+            .checked_mul(2 * denominator)?
+            .checked_add(denominator - 1)?;
+        i64::try_from(limit.div_euclid(2 * i128::from(self.ticks_numerator))).ok()
     }
 
     /// The index of the frame boundary nearest `ticks`, with ties going to the later frame.
@@ -411,6 +422,31 @@ mod tests {
             for index in [0, 1, 7, 100, 100_000] {
                 let ticks = frame.ticks_at_frame(index).expect("an in-range offset");
                 assert_eq!(frame.frame_round(ticks), Some(index), "{rate:?} {index}");
+            }
+        }
+    }
+
+    #[test]
+    fn frame_floor_inverts_the_rounded_frame_start() {
+        for rate in [
+            FrameRate::new(7, 1),
+            FrameRate::FPS_23_976,
+            FrameRate::FPS_30,
+            FrameRate::FPS_60,
+            FrameRate::new(144, 1),
+            FrameRate::new(1_000, 7),
+            FrameRate::nearest(23.0).expect("a real rate"),
+        ] {
+            let frame = rate.frame_duration().expect("a valid rate has a duration");
+            for index in (-50..2_000).chain([100_000, 1_000_003]) {
+                let start = frame.ticks_at_frame(index).expect("an in-range offset");
+                assert_eq!(frame.frame_floor(start), Some(index), "{rate:?} {index}");
+                // One tick before the rounded start still belongs to the previous frame.
+                assert_eq!(
+                    frame.frame_floor(start - 1),
+                    Some(index - 1),
+                    "{rate:?} {index}"
+                );
             }
         }
     }

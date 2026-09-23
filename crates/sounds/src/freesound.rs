@@ -7,7 +7,7 @@ pub const PROVIDER: &str = "Freesound";
 
 const BASE_URL: &str = "https://freesound.org/apiv2/search/text/";
 const TIMEOUT: Duration = Duration::from_secs(15);
-const FIELDS: &str = "id,name,description,url,previews,download,duration,filesize,type,channels,bitrate,bitdepth,samplerate,username,tags,license,created,num_downloads,avg_rating,num_ratings";
+const FIELDS: &str = "id,name,description,url,previews,duration,filesize,type,channels,bitrate,bitdepth,samplerate,username,tags,license,created,num_downloads,avg_rating,num_ratings";
 
 const COMMERCIAL_LICENSE_FILTER: &str =
     "license:(\"Attribution\" OR \"Creative Commons 0\" OR \"Attribution Commercial\")";
@@ -26,6 +26,14 @@ fn encode(value: &str) -> String {
         }
     }
     encoded
+}
+
+/// Whether `url` is Freesound's `download` endpoint — the original file, which only an
+/// OAuth2 session may fetch. Results parsed before the preview became the download
+/// carried it, and the saved-sounds file keeps such results as they were.
+pub(crate) fn is_oauth_download_url(url: &str) -> bool {
+    let url = url.trim();
+    url.contains("freesound.org/apiv2/sounds/") && url.trim_end_matches('/').ends_with("/download")
 }
 
 pub fn build_url(api_key: &str, query: &str, page: usize, page_size: usize) -> String {
@@ -101,11 +109,10 @@ fn effect_from_result(result: &Value) -> Option<SoundResult> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
-        download_url: result
-            .get("download")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| preview_url.clone()),
+        // Freesound's `download` endpoint (the original file) requires OAuth2 and
+        // answers 401 to token-authenticated requests, so the HQ preview is the best
+        // file we can actually fetch.
+        download_url: preview_url.clone(),
         preview_url,
         duration: result
             .get("duration")
@@ -193,6 +200,7 @@ mod tests {
                     "preview-hq-mp3": "https://freesound.org/data/previews/1234-hq.mp3",
                     "preview-lq-mp3": "https://freesound.org/data/previews/1234-lq.mp3"
                 },
+                "download": "https://freesound.org/apiv2/sounds/1234/download/",
                 "duration": 1.25,
                 "filesize": 4096,
                 "type": "wav",
@@ -215,6 +223,22 @@ mod tests {
         assert_eq!(effect.download_url, effect.preview_url);
         assert_eq!(effect.source, SoundSource::Freesound);
         assert!((effect.duration - 1.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn only_the_api_download_endpoint_counts_as_needing_oauth() {
+        assert!(is_oauth_download_url(
+            "https://freesound.org/apiv2/sounds/1234/download/"
+        ));
+        assert!(is_oauth_download_url(
+            " https://freesound.org/apiv2/sounds/1234/download "
+        ));
+        assert!(!is_oauth_download_url(
+            "https://freesound.org/data/previews/1234-hq.mp3"
+        ));
+        assert!(!is_oauth_download_url(
+            "https://archive.org/download/album/a.mp3"
+        ));
     }
 
     #[test]

@@ -315,9 +315,11 @@ impl PlaybackController {
         {
             *presented = None;
         }
+        // Only an empty preview may jump ahead to a frame that is not due yet.
+        let force_first = presented.is_none();
         if let Some(fresh) = self
             .queue
-            .take_due(generation, |slot| !playing || slot.time <= due)
+            .take_due(generation, force_first, |slot| !playing || slot.time <= due)
         {
             *presented = Some(fresh);
         }

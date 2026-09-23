@@ -4,7 +4,7 @@ use std::sync::Arc;
 use cutix_playback::audio_decode::AudioCache;
 use cutix_playback::decode_cache::DecodeCache;
 use cutix_playback::render::{ComposeRequest, FrameComposer};
-use cutix_playback::{MediaMap, PlaybackController};
+use cutix_playback::{MediaMap, PlaybackController, PlaybackError, missing_media};
 use cutix_playback::{MixRequest, mix};
 use cutix_project::Project;
 use cutix_project::model::{TimelineElement, Track};
@@ -116,17 +116,230 @@ fn image_element(media_id: &str, patch: serde_json::Value) -> TimelineElement {
     serde_json::from_value(value).unwrap()
 }
 
+/// Written once per test binary: tests run in parallel, and rewriting the shared file
+/// under a test that is decoding it yields a truncated PNG, which now just drops the
+/// layer and blanks the frame.
 fn quadrant_png() -> PathBuf {
-    let directory = std::env::temp_dir().join("cutix-playback-tests");
-    std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("quadrants.png");
-    let mut buffer = image::RgbaImage::new(2, 2);
-    buffer.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
-    buffer.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
-    buffer.put_pixel(0, 1, image::Rgba([0, 0, 255, 255]));
-    buffer.put_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
-    buffer.save(&path).unwrap();
-    path
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let directory = std::env::temp_dir().join("cutix-playback-tests");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("quadrants-{}.png", std::process::id()));
+        let mut buffer = image::RgbaImage::new(2, 2);
+        buffer.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        buffer.put_pixel(1, 0, image::Rgba([0, 255, 0, 255]));
+        buffer.put_pixel(0, 1, image::Rgba([0, 0, 255, 255]));
+        buffer.put_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+        buffer.save(&path).unwrap();
+        path
+    })
+    .clone()
+}
+
+/// A file with a PNG name that no decoder accepts, written once per test binary.
+fn bogus_png() -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let directory = std::env::temp_dir().join("cutix-playback-tests");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("bogus-{}.png", std::process::id()));
+        std::fs::write(&path, b"this is not a png").unwrap();
+        path
+    })
+    .clone()
+}
+
+#[test]
+fn a_lenient_composer_drops_a_missing_layer_where_a_strict_one_fails() {
+    let Ok(mut composer) = FrameComposer::new() else {
+        eprintln!("no gpu adapter; skipping");
+        return;
+    };
+    let project = project_with(vec![image_element("quadrants", json!({}))]);
+    let request = ComposeRequest {
+        project: &project,
+        scene_id: None,
+        time: MediaTime::ZERO,
+        width: 8,
+        height: 8,
+    };
+
+    // The preview default: the layer is dropped and reported, the frame still renders.
+    let nothing = MediaMap::new();
+    let frame = composer.compose(&request, &nothing).unwrap();
+    assert!(
+        frame
+            .skipped
+            .iter()
+            .any(|reason| reason == "media-missing:quadrants"),
+        "{:?}",
+        frame.skipped
+    );
+    let undecodable = MediaMap::new().with("quadrants", bogus_png());
+    let frame = composer.compose(&request, &undecodable).unwrap();
+    assert!(
+        frame
+            .skipped
+            .iter()
+            .any(|reason| reason == "media-decode:quadrants"),
+        "{:?}",
+        frame.skipped
+    );
+
+    // The export setting: the same two frames are errors that name the media.
+    composer.set_strict_media(true);
+    let error = composer.compose(&request, &nothing).unwrap_err();
+    assert!(
+        matches!(&error, PlaybackError::MediaNotFound(id) if id == "quadrants"),
+        "{error}"
+    );
+    let error = composer.compose(&request, &undecodable).unwrap_err();
+    assert!(!matches!(error, PlaybackError::MediaNotFound(_)), "{error}");
+
+    // And back: the composer is reusable for the preview afterwards.
+    composer.set_strict_media(false);
+    assert!(composer.compose(&request, &nothing).is_ok());
+}
+
+#[test]
+fn missing_media_names_only_the_visible_layers_whose_files_are_gone() {
+    let project = project_with(vec![
+        image_element("present", json!({})),
+        image_element("gone", json!({})),
+        image_element("gone", json!({ "id": "second-use-of-gone" })),
+        image_element("hidden-and-gone", json!({ "hidden": true })),
+    ]);
+    let media = MediaMap::new().with("present", quadrant_png());
+    assert_eq!(
+        missing_media(&project, None, &media),
+        vec!["gone".to_string()]
+    );
+    assert!(missing_media(&project, None, &MediaMap::new()).contains(&"present".to_string()));
+}
+
+/// A video clip on the main track whose sound comes from `media_id`, with an optional
+/// linear crossfade of `transition_seconds` from the previous clip.
+fn crossfading_clip(
+    id: &str,
+    media_id: &str,
+    start: f64,
+    duration: f64,
+    trim_start: f64,
+    transition_seconds: Option<f64>,
+) -> TimelineElement {
+    let mut value = json!({
+        "type": "video",
+        "id": id,
+        "name": id,
+        "duration": seconds(duration).as_ticks(),
+        "startTime": seconds(start).as_ticks(),
+        "trimStart": seconds(trim_start).as_ticks(),
+        "trimEnd": 0,
+        "mediaId": media_id,
+        "transform": { "scaleX": 1.0, "scaleY": 1.0, "position": { "x": 0.0, "y": 0.0 }, "rotate": 0.0 },
+        "opacity": 1.0
+    });
+    if let Some(transition) = transition_seconds {
+        value["transition"] = json!({
+            "type": "crossfade",
+            "duration": seconds(transition).as_ticks(),
+            "easing": "linear"
+        });
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+/// Five seconds of a constant half-scale signal, written once per test binary.
+fn constant_wav(sample_rate: u32) -> PathBuf {
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let directory = std::env::temp_dir().join("cutix-playback-tests");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("constant-{}.wav", std::process::id()));
+        write_wav(
+            &path,
+            sample_rate,
+            &vec![16_384i16; sample_rate as usize * 5],
+        );
+        path
+    })
+    .clone()
+}
+
+fn mixed_mono(project: &Project, media: &MediaMap, sample_rate: u32, duration: f64) -> Vec<f32> {
+    let mut cache = AudioCache::new();
+    let (buffer, skipped) = mix(
+        &MixRequest {
+            project,
+            scene_id: None,
+            start: MediaTime::ZERO,
+            duration: seconds(duration),
+            sample_rate,
+            channels: 1,
+        },
+        media,
+        &mut cache,
+    )
+    .unwrap();
+    assert!(skipped.is_empty(), "{skipped:?}");
+    buffer.interleaved
+}
+
+#[test]
+fn an_incoming_clip_with_a_head_handle_crossfades_without_a_step_at_the_cut() {
+    let sample_rate = 48_000u32;
+    let media = MediaMap::new().with("tone", constant_wav(sample_rate));
+    // a covers 0-2 s, b covers 2-4 s with a 1 s crossfade; b is trimmed 1 s in, so it
+    // has a full head handle to play under the outgoing half of the window.
+    let project = project_with(vec![
+        crossfading_clip("a", "tone", 0.0, 2.0, 0.0, None),
+        crossfading_clip("b", "tone", 2.0, 2.0, 1.0, Some(1.0)),
+    ]);
+    let mixed = mixed_mono(&project, &media, sample_rate, 4.0);
+    let level = 16_384.0 / 32_768.0;
+    let at = |seconds: f64| mixed[(seconds * sample_rate as f64).round() as usize];
+
+    // Two linear ramps over the same window sum to a constant; before the change b
+    // was silent until 2.0 s and the level sagged to half just before the cut.
+    for probe in [1.4, 1.5, 1.75, 1.999, 2.0, 2.001, 2.25, 2.499, 2.6] {
+        let measured = at(probe);
+        assert!(
+            (measured - level).abs() < 2e-3,
+            "at {probe}s: {measured} != {level}"
+        );
+    }
+    let cut = sample_rate as usize * 2;
+    let step = (mixed[cut] - mixed[cut - 1])
+        .abs()
+        .max((mixed[cut + 1] - mixed[cut]).abs());
+    assert!(step < 1e-3, "step of {step} at the cut");
+}
+
+#[test]
+fn an_incoming_clip_without_a_head_handle_ramps_in_from_its_own_start() {
+    let sample_rate = 48_000u32;
+    let media = MediaMap::new().with("tone", constant_wav(sample_rate));
+    let project = project_with(vec![
+        crossfading_clip("a", "tone", 0.0, 2.0, 0.0, None),
+        crossfading_clip("b", "tone", 2.0, 2.0, 0.0, Some(1.0)),
+    ]);
+    let mixed = mixed_mono(&project, &media, sample_rate, 4.0);
+    let level = 16_384.0 / 32_768.0;
+    let at = |seconds: f64| mixed[(seconds * sample_rate as f64).round() as usize];
+
+    // Nothing to play before 2.0 s: only a, fading over the whole window.
+    assert!((at(1.75) - level * 0.75).abs() < 2e-3, "{}", at(1.75));
+    // At the cut b starts from silence rather than jumping in at half gain.
+    assert!((at(2.0) - level * 0.5).abs() < 2e-3, "{}", at(2.0));
+    let cut = sample_rate as usize * 2;
+    assert!((mixed[cut] - mixed[cut - 1]).abs() < 1e-3);
+    // Its fade is rebased onto [2.0, 2.5]: halfway there it is at half gain.
+    assert!(
+        (at(2.25) - (level * 0.25 + level * 0.5)).abs() < 2e-3,
+        "{}",
+        at(2.25)
+    );
+    assert!((at(2.6) - level).abs() < 2e-3, "{}", at(2.6));
 }
 
 #[test]
@@ -1443,19 +1656,24 @@ fn text_ink_is_centred_and_inside_the_canvas() {
     );
 }
 
+/// Written once per test binary, for the same reason as [`quadrant_png`].
 fn stripes_png() -> PathBuf {
-    let directory = std::env::temp_dir().join("cutix-playback-tests");
-    std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join("stripes.png");
-    let mut buffer = image::RgbaImage::new(256, 256);
-    for y in 0..256u32 {
-        for x in 0..256u32 {
-            let value = if (x / 4) % 2 == 0 { 0u8 } else { 255u8 };
-            buffer.put_pixel(x, y, image::Rgba([value, value, value, 255]));
+    static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let directory = std::env::temp_dir().join("cutix-playback-tests");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("stripes-{}.png", std::process::id()));
+        let mut buffer = image::RgbaImage::new(256, 256);
+        for y in 0..256u32 {
+            for x in 0..256u32 {
+                let value = if (x / 4) % 2 == 0 { 0u8 } else { 255u8 };
+                buffer.put_pixel(x, y, image::Rgba([value, value, value, 255]));
+            }
         }
-    }
-    buffer.save(&path).unwrap();
-    path
+        buffer.save(&path).unwrap();
+        path
+    })
+    .clone()
 }
 
 fn right_half_matte() -> (Vec<u8>, u32, u32) {
@@ -1884,5 +2102,116 @@ fn correcting_the_clock_keeps_the_frames_already_composed() {
     assert!(
         controller.current_time() >= seconds(0.5),
         "the correction must actually move the playhead"
+    );
+}
+
+#[test]
+fn a_missing_or_broken_file_drops_only_its_own_layer() {
+    let Ok(mut composer) = FrameComposer::new() else {
+        eprintln!("no gpu adapter; skipping");
+        return;
+    };
+    let broken = std::env::temp_dir()
+        .join("cutix-playback-tests")
+        .join("not-really-a.png");
+    std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+    std::fs::write(&broken, b"this is not an image").unwrap();
+
+    let project = project_with(vec![
+        image_element("gone", json!({})),
+        image_element("broken", json!({})),
+        image_element("quadrants", json!({})),
+    ]);
+    let media = MediaMap::new()
+        .with("broken", &broken)
+        .with("quadrants", quadrant_png());
+    let frame = composer
+        .compose(
+            &ComposeRequest {
+                project: &project,
+                scene_id: None,
+                time: MediaTime::ZERO,
+                width: 64,
+                height: 36,
+            },
+            &media,
+        )
+        .expect("one bad file must not fail the whole frame");
+
+    assert!(
+        frame
+            .skipped
+            .iter()
+            .any(|entry| entry == "media-missing:gone"),
+        "{:?}",
+        frame.skipped
+    );
+    assert!(
+        frame
+            .skipped
+            .iter()
+            .any(|entry| entry == "media-decode:broken"),
+        "{:?}",
+        frame.skipped
+    );
+    let drawn: Vec<&str> = frame.rects.iter().map(|(id, _)| id.as_str()).collect();
+    assert_eq!(drawn, ["image-quadrants"]);
+}
+
+#[test]
+fn an_effect_track_filters_everything_beneath_it() {
+    let Ok(mut composer) = FrameComposer::new() else {
+        eprintln!("no gpu adapter; skipping");
+        return;
+    };
+    let mut project = project_with(vec![image_element("quadrants", json!({}))]);
+    let media = MediaMap::new().with("quadrants", quadrant_png());
+    fn request(project: &Project) -> ComposeRequest<'_> {
+        ComposeRequest {
+            project,
+            scene_id: None,
+            time: MediaTime::ZERO,
+            width: 64,
+            height: 64,
+        }
+    }
+
+    let plain = composer.compose(&request(&project), &media).unwrap();
+    assert_ne!(
+        plain.pixel(8, 8),
+        plain.pixel(56, 56),
+        "the quadrants differ before the effect: {:?}",
+        plain.skipped
+    );
+
+    let mosaic: TimelineElement = serde_json::from_value(json!({
+        "type": "effect",
+        "id": "mosaic-layer",
+        "name": "Mosaic",
+        "duration": seconds(2.0).as_ticks(),
+        "startTime": 0,
+        "trimStart": 0,
+        "trimEnd": 0,
+        "effectType": "mosaic",
+        "params": { "blockSize": 100000.0 }
+    }))
+    .unwrap();
+    project.scenes[0].tracks.overlay.push(Track::Effect {
+        id: "effect-track".into(),
+        name: "Effects".into(),
+        elements: vec![mosaic],
+        hidden: false,
+    });
+
+    let filtered = composer.compose(&request(&project), &media).unwrap();
+    assert!(
+        !filtered.skipped.iter().any(|entry| entry == "effect"),
+        "{:?}",
+        filtered.skipped
+    );
+    assert_eq!(
+        filtered.pixel(8, 8),
+        filtered.pixel(56, 56),
+        "one mosaic block over the whole canvas leaves a single colour"
     );
 }

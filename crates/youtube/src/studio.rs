@@ -1,4 +1,5 @@
-use crate::cdp::{Connection, Page, query, query_all};
+use crate::cdp::{Connection, Key, Page, query, query_all};
+use crate::clock::Zone;
 use crate::failure::Failure;
 use crate::publish::{Privacy, PublishSettings};
 use crate::selectors::studio as css;
@@ -157,6 +158,32 @@ fn click_if_present(connection: &mut Connection, page: &Page, selector: &str) ->
     .unwrap_or(false)
 }
 
+/// The caller's progress callback, plus the last thing it was told.
+///
+/// Its answer is the only way a Cancel reaches the upload, so it is asked at every stage
+/// change and, by re-sending the last stage, on every poll of a long wait — without
+/// that a Cancel pressed while Studio is still opening or walking its steps would only
+/// be seen once the transfer began, or never.
+struct Progress<'a> {
+    report: &'a mut dyn FnMut(Stage, u32) -> Control,
+    last: (Stage, u32),
+}
+
+impl Progress<'_> {
+    fn tell(&mut self, stage: Stage, percent: u32) -> Result<(), Failure> {
+        self.last = (stage, percent);
+        match (self.report)(stage, percent) {
+            Control::Continue => Ok(()),
+            Control::Cancel => Err(Failure::Cancelled),
+        }
+    }
+
+    fn still_wanted(&mut self) -> Result<(), Failure> {
+        let (stage, percent) = self.last;
+        self.tell(stage, percent)
+    }
+}
+
 pub fn upload(
     connection: &mut Connection,
     page: &Page,
@@ -167,37 +194,77 @@ pub fn upload(
     if !source.is_file() {
         return Err(Failure::Io(format!("{} is not a file", source.display())));
     }
-    report(Stage::Opening, 0);
+    let mut progress = Progress {
+        report,
+        last: (Stage::Opening, 0),
+    };
+    let outcome = drive(connection, page, settings, source, &mut progress);
+    if outcome.as_ref().is_err_and(Failure::is_cancelled) {
+        let _ = click_if_present(connection, page, css::CLOSE_DIALOG);
+    }
+    outcome
+}
 
-    open_dialog(connection, page)?;
+fn drive(
+    connection: &mut Connection,
+    page: &Page,
+    settings: &PublishSettings,
+    source: &Path,
+    progress: &mut Progress,
+) -> Result<String, Failure> {
+    progress.tell(Stage::Opening, 0)?;
+
+    open_dialog(connection, page, progress)?;
+    progress.still_wanted()?;
     page.choose_file(connection, css::SELECT_FILES, source)?;
 
-    page.wait_until(
+    wait_or_cancel(
         connection,
+        page,
         &format!("(() => {}.length > 1)()", query_all(css::TEXT_BOXES)),
         DIALOG_TIMEOUT,
         "details form",
+        progress,
     )?;
-    report(Stage::Uploading, 0);
+    progress.tell(Stage::Uploading, 0)?;
 
     fill_details(connection, page, settings)?;
+    progress.still_wanted()?;
 
-    let video_id = wait_for_video_id(connection, page)?;
+    let video_id = wait_for_video_id(connection, page, progress)?;
 
-    match watch_transfer(connection, page, report)? {
-        Control::Cancel => {
-            let _ = click_if_present(connection, page, css::CLOSE_DIALOG);
-            return Err(Failure::Cancelled);
-        }
-        Control::Continue => {}
-    }
+    watch_transfer(connection, page, progress)?;
 
     restore_details(connection, page, settings);
 
-    report(Stage::Publishing, 0);
-    finish(connection, page, settings)?;
-    report(Stage::Done, 100);
+    progress.tell(Stage::Publishing, 0)?;
+    finish(connection, page, settings, progress)?;
+    // Past Done there is nothing left to take back, so what the callback answers to the
+    // last report no longer matters.
+    let _ = progress.tell(Stage::Done, 100);
     Ok(video_id)
+}
+
+/// [`Page::wait_until`], asking the caller between polls whether to go on.
+fn wait_or_cancel(
+    connection: &mut Connection,
+    page: &Page,
+    script: &str,
+    timeout: Duration,
+    what: &str,
+    progress: &mut Progress,
+) -> Result<(), Failure> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if page.eval_bool(connection, script).unwrap_or(false) {
+            return Ok(());
+        }
+        progress.still_wanted()?;
+        if std::time::Instant::now() >= deadline {
+            return Err(Failure::Timeout(what.to_string()));
+        }
+        std::thread::sleep(crate::cdp::POLL_INTERVAL);
+    }
 }
 
 fn restore_details(connection: &mut Connection, page: &Page, settings: &PublishSettings) {
@@ -487,7 +554,28 @@ fn set_playlists(connection: &mut Connection, page: &Page, wanted: &[String]) {
     click_if_present(connection, page, css::PLAYLIST_DONE);
 }
 
-fn open_dialog(connection: &mut Connection, page: &Page) -> Result<(), Failure> {
+fn open_dialog(
+    connection: &mut Connection,
+    page: &Page,
+    progress: &mut Progress,
+) -> Result<(), Failure> {
+    // A timed-out wait only means "try the next way in"; a Cancel ends the whole thing.
+    let appeared = |connection: &mut Connection, progress: &mut Progress| {
+        let waited = wait_or_cancel(
+            connection,
+            page,
+            &exists(css::SELECT_FILES),
+            DIALOG_SETTLE,
+            "upload dialog",
+            progress,
+        );
+        match waited {
+            Ok(()) => Ok(true),
+            Err(Failure::Cancelled) => Err(Failure::Cancelled),
+            Err(_) => Ok(false),
+        }
+    };
+
     for attempt in 0..DIALOG_ATTEMPTS {
         if attempt > 0 {
             let _ = page.eval(
@@ -497,29 +585,13 @@ fn open_dialog(connection: &mut Connection, page: &Page) -> Result<(), Failure> 
         }
         page.navigate(connection, UPLOAD_URL)?;
 
-        if page
-            .wait_until(
-                connection,
-                &exists(css::SELECT_FILES),
-                DIALOG_SETTLE,
-                "upload dialog",
-            )
-            .is_ok()
-        {
+        if appeared(connection, progress)? {
             return Ok(());
         }
         if click_if_present(connection, page, css::CREATE_BUTTON) {
             std::thread::sleep(TICK);
             click_if_present(connection, page, css::UPLOAD_MENU_ITEM);
-            if page
-                .wait_until(
-                    connection,
-                    &exists(css::SELECT_FILES),
-                    DIALOG_SETTLE,
-                    "upload dialog",
-                )
-                .is_ok()
-            {
+            if appeared(connection, progress)? {
                 return Ok(());
             }
         }
@@ -813,9 +885,14 @@ fn set_notify_subscribers(connection: &mut Connection, page: &Page, wanted: bool
     set_checkbox(connection, page, css::NOTIFY_SUBSCRIBERS, wanted);
 }
 
-fn wait_for_video_id(connection: &mut Connection, page: &Page) -> Result<String, Failure> {
+fn wait_for_video_id(
+    connection: &mut Connection,
+    page: &Page,
+    progress: &mut Progress,
+) -> Result<String, Failure> {
     let deadline = std::time::Instant::now() + DIALOG_TIMEOUT;
     loop {
+        progress.still_wanted()?;
         let link = page
             .eval_string(
                 connection,
@@ -842,8 +919,8 @@ fn wait_for_video_id(connection: &mut Connection, page: &Page) -> Result<String,
 fn watch_transfer(
     connection: &mut Connection,
     page: &Page,
-    report: &mut dyn FnMut(Stage, u32) -> Control,
-) -> Result<Control, Failure> {
+    progress: &mut Progress,
+) -> Result<(), Failure> {
     let deadline = std::time::Instant::now() + TRANSFER_TIMEOUT;
     let mut last = (Stage::Uploading, u32::MAX);
     loop {
@@ -872,13 +949,13 @@ fn watch_transfer(
 
         if (stage, percent) != last && percent != u32::MAX {
             last = (stage, percent);
-            if report(stage, percent) == Control::Cancel {
-                return Ok(Control::Cancel);
-            }
+            progress.tell(stage, percent)?;
+        } else {
+            progress.still_wanted()?;
         }
 
         if stage == Stage::Processing {
-            return Ok(Control::Continue);
+            return Ok(());
         }
         if std::time::Instant::now() >= deadline {
             return Err(Failure::Timeout("upload".to_string()));
@@ -891,18 +968,23 @@ fn finish(
     connection: &mut Connection,
     page: &Page,
     settings: &PublishSettings,
+    progress: &mut Progress,
 ) -> Result<(), Failure> {
-    walk_to_last_step(connection, page)?;
+    walk_to_last_step(connection, page, progress)?;
 
     set_notify_subscribers(connection, page, settings.notify_subscribers);
     apply_visibility(connection, page, settings)?;
 
-    page.wait_until(
+    wait_or_cancel(
         connection,
+        page,
         &usable(css::DONE),
         STEP_TIMEOUT,
         "publish button",
+        progress,
     )?;
+    // The last moment a Cancel can still leave the video an unpublished draft.
+    progress.still_wanted()?;
     trace_dialog(connection, page, "before-done");
     if !real_click(connection, page, css::DONE) {
         return Err(Failure::PageChanged(css::DONE.to_string()));
@@ -912,12 +994,17 @@ fn finish(
     wait_until_published(connection, page)
 }
 
-fn walk_to_last_step(connection: &mut Connection, page: &Page) -> Result<(), Failure> {
+fn walk_to_last_step(
+    connection: &mut Connection,
+    page: &Page,
+    progress: &mut Progress,
+) -> Result<(), Failure> {
     let deadline = std::time::Instant::now() + STEP_TIMEOUT * 4;
     while !page
         .eval_bool(connection, &visible(css::DONE))
         .unwrap_or(false)
     {
+        progress.still_wanted()?;
         if let Some(failure) = studio_error(connection, page) {
             return Err(failure);
         }
@@ -1032,11 +1119,7 @@ fn apply_visibility(
         .as_deref()
         .filter(|at| !at.trim().is_empty())
     {
-        if schedule(connection, page, publish_at) {
-            return Ok(());
-        }
-
-        return Err(Failure::PageChanged(css::SCHEDULE_TOGGLE.to_string()));
+        return schedule(connection, page, publish_at);
     }
 
     let state = match settings.effective_privacy() {
@@ -1067,20 +1150,195 @@ fn apply_visibility(
     }
 }
 
-fn schedule(connection: &mut Connection, page: &Page, publish_at: &str) -> bool {
+/// Sets the schedule, and proves Studio took it.
+///
+/// Studio reads what is typed into its picker as a time on the browser's clock, which
+/// is this machine's local one, while the settings carry a UTC instant — so the instant
+/// is turned into the local reading first. Each field is committed with Enter and read
+/// back afterwards: a picker that quietly kept its own default would otherwise publish
+/// the video at a time nobody chose.
+fn schedule(connection: &mut Connection, page: &Page, publish_at: &str) -> Result<(), Failure> {
+    let wanted = WallClock::of_stamp(publish_at, Zone::Local)
+        .ok_or_else(|| Failure::PageChanged(format!("schedule time {publish_at:?}")))?;
     if !click_if_present(connection, page, css::SCHEDULE_TOGGLE) {
-        return false;
+        return Err(Failure::PageChanged(css::SCHEDULE_TOGGLE.to_string()));
     }
-    let (date, time) = match publish_at.split_once('T') {
-        Some((date, rest)) => (date, rest.trim_end_matches('Z')),
-        None => return false,
-    };
-    let hour_minute = time.get(0..5).unwrap_or(time);
+    // Not a timeout worth retrying: a schedule that never opens is a changed page.
+    page.wait_until(
+        connection,
+        &visible(css::SCHEDULE_DATE_TRIGGER),
+        STEP_TIMEOUT,
+        "schedule date",
+    )
+    .map_err(|_| Failure::PageChanged(css::SCHEDULE_DATE_TRIGGER.to_string()))?;
 
-    page.fill(connection, css::SCHEDULE_DATE, date).is_ok()
+    let date = wanted.studio_date();
+    type_date(connection, page, &date)?;
+    let shown = page
+        .eval_string(connection, &shown_date())
+        .unwrap_or_default();
+    if read_studio_date(&shown) != Some((wanted.year, wanted.month, wanted.day)) {
+        return Err(Failure::PageChanged(format!(
+            "schedule date: typed {date:?}, Studio shows {shown:?}"
+        )));
+    }
+
+    let time = wanted.studio_time();
+    page.fill(connection, css::SCHEDULE_TIME, &time)?;
+    page.press(connection, Key::Enter)?;
+    std::thread::sleep(TICK);
+    let shown = page
+        .eval_string(connection, &value_of(css::SCHEDULE_TIME))
+        .unwrap_or_default();
+    if read_studio_time(&shown) != Some((wanted.hour, wanted.minute)) {
+        return Err(Failure::PageChanged(format!(
+            "schedule time: typed {time:?}, Studio shows {shown:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Types the date where Studio takes it: the text field of the small dialog clicking
+/// the date opens, or, when no dialog appears, a field inside the date itself.
+fn type_date(connection: &mut Connection, page: &Page, date: &str) -> Result<(), Failure> {
+    let dialog = click_if_present(connection, page, css::SCHEDULE_DATE_TRIGGER)
         && page
-            .fill(connection, css::SCHEDULE_TIME, hour_minute)
-            .is_ok()
+            .wait_until(
+                connection,
+                &visible(css::SCHEDULE_DATE_INPUT),
+                DATE_DIALOG_TIMEOUT,
+                "date picker",
+            )
+            .is_ok();
+    let field = if dialog {
+        css::SCHEDULE_DATE_INPUT
+    } else {
+        css::SCHEDULE_DATE
+    };
+    page.fill(connection, field, date)?;
+    page.press(connection, Key::Enter)?;
+    std::thread::sleep(TICK);
+    Ok(())
+}
+
+const DATE_DIALOG_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn shown_date() -> String {
+    format!(
+        "(() => {{ const node = {}; if (!node) return ''; const input = node.querySelector('input'); \
+         return ((input && input.value) || node.innerText || node.textContent || '').trim(); }})()",
+        query(css::SCHEDULE_DATE_TRIGGER)
+    )
+}
+
+fn value_of(selector: &str) -> String {
+    format!(
+        "(() => {{ const node = {}; return node ? String(node.value || '').trim() : ''; }})()",
+        query(selector)
+    )
+}
+
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/// A reading of a clock, in the fields Studio's schedule picker shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WallClock {
+    pub year: i64,
+    pub month: u32,
+    pub day: u32,
+    pub hour: u32,
+    pub minute: u32,
+}
+
+impl WallClock {
+    /// What a clock in `zone` shows at the instant a UTC publish stamp names.
+    pub fn of_stamp(publish_at: &str, zone: Zone) -> Option<Self> {
+        let wall = zone.wall_clock(crate::unix_from_iso(publish_at.trim())?);
+        let (year, month, day) = crate::civil_from_unix(wall);
+        let seconds = wall.rem_euclid(86_400);
+        Some(Self {
+            year,
+            month,
+            day,
+            hour: (seconds / 3_600) as u32,
+            minute: (seconds % 3_600 / 60) as u32,
+        })
+    }
+
+    /// The date the way English Studio writes it, `Sep 23, 2026`.
+    pub fn studio_date(&self) -> String {
+        let month = MONTHS[(self.month.clamp(1, 12) - 1) as usize];
+        format!("{month} {}, {}", self.day, self.year)
+    }
+
+    /// The time the way English Studio writes it, `3:05 PM`.
+    pub fn studio_time(&self) -> String {
+        let (hour, half) = match self.hour {
+            0 => (12, "AM"),
+            1..=11 => (self.hour, "AM"),
+            12 => (12, "PM"),
+            later => (later - 12, "PM"),
+        };
+        format!("{hour}:{:02} {half}", self.minute)
+    }
+}
+
+/// Year, month and day out of the date Studio shows — `Sep 23, 2026`, `23 Sep 2026`,
+/// `September 23, 2026` or `2026-09-23`.
+pub fn read_studio_date(text: &str) -> Option<(i64, u32, u32)> {
+    let words: Vec<&str> = text
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+
+    if let [year, month, day] = words.as_slice()
+        && year.len() == 4
+        && let (Ok(year), Ok(month), Ok(day)) = (year.parse(), month.parse(), day.parse())
+    {
+        return Some((year, month, day));
+    }
+
+    let month = words.iter().find_map(|word| month_number(word))?;
+    let numbers: Vec<i64> = words.iter().filter_map(|word| word.parse().ok()).collect();
+    let year = *numbers.iter().find(|number| **number >= 1_000)?;
+    let day = *numbers.iter().find(|number| (1..=31).contains(*number))?;
+    Some((year, month, day as u32))
+}
+
+fn month_number(word: &str) -> Option<u32> {
+    if word.len() < 3
+        || !word
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+    {
+        return None;
+    }
+    let word = word.to_ascii_lowercase();
+    MONTHS
+        .iter()
+        .position(|month| word.starts_with(&month.to_ascii_lowercase()))
+        .map(|index| index as u32 + 1)
+}
+
+/// Hour (0–23) and minute out of the time Studio shows, on a 12- or 24-hour clock.
+pub fn read_studio_time(text: &str) -> Option<(u32, u32)> {
+    let lower = text.trim().to_ascii_lowercase();
+    let (hour, rest) = lower.split_once(':')?;
+    let hour: u32 = hour.trim().parse().ok()?;
+    let minute: u32 = rest
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .ok()?;
+    let hour = match (lower.contains("am"), lower.contains("pm"), hour) {
+        (true, false, 12) => 0,
+        (false, true, 1..=11) => hour + 12,
+        _ => hour,
+    };
+    (hour < 24 && minute < 60).then_some((hour, minute))
 }
 
 fn daily_limit(connection: &mut Connection, page: &Page) -> Option<Failure> {
@@ -1204,6 +1462,121 @@ mod tests {
         assert!(Stage::Processing < Stage::Publishing);
         assert!(Stage::Publishing < Stage::Done);
         assert_eq!(Stage::Uploading.message_key(), "youtube.stage.uploading");
+    }
+
+    #[test]
+    fn a_cancel_answered_to_any_report_stops_the_upload_and_a_poll_repeats_the_last_stage() {
+        let mut seen = Vec::new();
+        {
+            let mut calls = 0;
+            let mut report = |stage: Stage, percent: u32| {
+                seen.push((stage, percent));
+                calls += 1;
+                if calls >= 3 {
+                    Control::Cancel
+                } else {
+                    Control::Continue
+                }
+            };
+            let mut progress = Progress {
+                report: &mut report,
+                last: (Stage::Opening, 0),
+            };
+
+            assert_eq!(progress.tell(Stage::Opening, 0), Ok(()));
+            assert_eq!(progress.tell(Stage::Uploading, 40), Ok(()));
+            assert_eq!(
+                progress.still_wanted(),
+                Err(Failure::Cancelled),
+                "a poll during a long wait is where the cancel is noticed"
+            );
+        }
+        assert_eq!(
+            seen,
+            [
+                (Stage::Opening, 0),
+                (Stage::Uploading, 40),
+                (Stage::Uploading, 40)
+            ],
+            "polling never moves the progress bar"
+        );
+    }
+
+    #[test]
+    fn a_utc_schedule_is_typed_as_the_local_clock_reads_it() {
+        let moscow = Zone::Fixed(3 * 3_600);
+        let wall = WallClock::of_stamp("2026-09-23T13:05:00Z", moscow).expect("stamp");
+        assert_eq!(
+            wall,
+            WallClock {
+                year: 2026,
+                month: 9,
+                day: 23,
+                hour: 16,
+                minute: 5
+            }
+        );
+        assert_eq!(wall.studio_date(), "Sep 23, 2026");
+        assert_eq!(wall.studio_time(), "4:05 PM");
+
+        let late_evening_in_new_york =
+            WallClock::of_stamp("2026-09-24T02:30:00Z", Zone::Fixed(-4 * 3_600)).expect("stamp");
+        assert_eq!(
+            late_evening_in_new_york.studio_date(),
+            "Sep 23, 2026",
+            "the date is the local one, not the UTC one"
+        );
+        assert_eq!(late_evening_in_new_york.studio_time(), "10:30 PM");
+
+        assert_eq!(WallClock::of_stamp("2026-09-23 13:05", moscow), None);
+    }
+
+    #[test]
+    fn midnight_and_noon_are_written_the_way_a_twelve_hour_clock_writes_them() {
+        let at = |hour| WallClock {
+            year: 2026,
+            month: 1,
+            day: 5,
+            hour,
+            minute: 0,
+        };
+        assert_eq!(at(0).studio_time(), "12:00 AM");
+        assert_eq!(at(11).studio_time(), "11:00 AM");
+        assert_eq!(at(12).studio_time(), "12:00 PM");
+        assert_eq!(at(23).studio_time(), "11:00 PM");
+        assert_eq!(at(0).studio_date(), "Jan 5, 2026");
+    }
+
+    #[test]
+    fn the_date_studio_shows_back_is_understood_in_the_shapes_it_comes_in() {
+        for shown in [
+            "Sep 23, 2026",
+            "September 23, 2026",
+            "23 Sep 2026",
+            "2026-09-23",
+            "  Sep 23, 2026 \n",
+        ] {
+            assert_eq!(read_studio_date(shown), Some((2026, 9, 23)), "{shown:?}");
+        }
+        assert_eq!(read_studio_date(""), None, "nothing shown is not a match");
+        assert_eq!(read_studio_date("Schedule"), None);
+        assert_ne!(
+            read_studio_date("Sep 24, 2026"),
+            Some((2026, 9, 23)),
+            "a picker that kept its own default is caught"
+        );
+    }
+
+    #[test]
+    fn the_time_studio_shows_back_is_understood_on_either_clock() {
+        assert_eq!(read_studio_time("4:05 PM"), Some((16, 5)));
+        assert_eq!(read_studio_time("4:05\u{202f}pm"), Some((16, 5)));
+        assert_eq!(read_studio_time("16:05"), Some((16, 5)));
+        assert_eq!(read_studio_time("12:00 AM"), Some((0, 0)));
+        assert_eq!(read_studio_time("12:30 PM"), Some((12, 30)));
+        assert_eq!(read_studio_time("9:15 AM"), Some((9, 15)));
+        assert_eq!(read_studio_time(""), None);
+        assert_eq!(read_studio_time("25:00"), None);
     }
 
     #[test]

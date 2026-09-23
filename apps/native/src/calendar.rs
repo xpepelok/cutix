@@ -56,15 +56,30 @@ pub fn clamp_day(year: i32, month: u32, day: u32) -> u32 {
     day.clamp(1, days_in_month(year, month).max(1))
 }
 
-pub fn to_stamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> String {
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:00Z",
-        year = year.clamp(0, 9999),
-        month = month.clamp(1, 12),
-        day = clamp_day(year, month, day),
-        hour = hour.min(23),
-        minute = minute.min(59),
-    )
+/// The UTC stamp of the instant a picked date and time name on the clock in `zone`.
+///
+/// The picker shows the local clock and Studio is told the local clock, but what is
+/// stored and checked against now is the instant — a stamp built by gluing `Z` onto the
+/// local digits would be off by the whole UTC offset. Impossible parts are clamped first,
+/// so the 31st of February stays in February rather than rolling into March.
+pub fn to_stamp(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    zone: youtube::clock::Zone,
+) -> String {
+    let year = year.clamp(0, 9999);
+    let month = month.clamp(1, 12);
+    let wall = youtube::unix_from_civil(
+        year,
+        month,
+        clamp_day(year, month, day),
+        hour.min(23),
+        minute.min(59),
+    );
+    youtube::iso_timestamp(zone.instant(wall))
 }
 
 pub fn month_key(month: u32) -> String {
@@ -75,31 +90,28 @@ pub fn weekday_key(index: u32) -> String {
     format!("calendar.weekday.{}", index.min(6))
 }
 
+/// The date and time a stamp's instant reads as on the clock in `zone`.
+///
 /// Only the tests in this file ask for this; compiled for them alone so the shipping
 /// binary does not carry something nothing calls.
 #[cfg(test)]
-pub fn from_stamp(stamp: &str) -> Option<(i32, u32, u32, u32, u32)> {
-    let (date, time) = stamp.trim().split_once('T')?;
-    let mut date = date.split('-');
-    let year: i32 = date.next()?.parse().ok()?;
-    let month: u32 = date.next()?.parse().ok()?;
-    let day: u32 = date.next()?.parse().ok()?;
-    let mut time = time.trim_end_matches('Z').split(':');
-    let hour: u32 = time.next()?.parse().ok()?;
-    let minute: u32 = time.next()?.parse().ok()?;
-
-    if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
-        return None;
-    }
-    if hour > 23 || minute > 59 {
-        return None;
-    }
-    Some((year, month, day, hour, minute))
+pub fn from_stamp(stamp: &str, zone: youtube::clock::Zone) -> Option<(i32, u32, u32, u32, u32)> {
+    let wall = zone.wall_clock(youtube::unix_from_iso(stamp.trim())?);
+    let (year, month, day) = youtube::civil_from_unix(wall);
+    let seconds = wall.rem_euclid(86_400);
+    Some((
+        year as i32,
+        month,
+        day,
+        (seconds / 3_600) as u32,
+        (seconds % 3_600 / 60) as u32,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use youtube::clock::Zone;
 
     #[test]
     fn february_knows_about_leap_years() {
@@ -163,38 +175,82 @@ mod tests {
         assert_eq!(clamp_day(2026, 1, 0), 1);
     }
 
+    const UTC: Zone = Zone::Fixed(0);
+    const MOSCOW: Zone = Zone::Fixed(3 * 3_600);
+
     #[test]
     fn a_stamp_has_the_shape_the_publish_settings_check_for() {
-        let stamp = to_stamp(2026, 8, 17, 9, 5);
+        let stamp = to_stamp(2026, 8, 17, 9, 5, UTC);
         assert_eq!(stamp, "2026-08-17T09:05:00Z");
         assert!(youtube::publish::is_rfc3339_utc(&stamp));
     }
 
     #[test]
+    fn a_stamp_names_the_instant_not_the_digits_on_the_local_clock() {
+        assert_eq!(
+            to_stamp(2026, 8, 17, 9, 5, MOSCOW),
+            "2026-08-17T06:05:00Z",
+            "09:05 in Moscow is 06:05 UTC"
+        );
+        assert_eq!(
+            to_stamp(2026, 8, 17, 1, 0, MOSCOW),
+            "2026-08-16T22:00:00Z",
+            "and early morning there is still the day before in UTC"
+        );
+        assert_eq!(
+            to_stamp(2026, 8, 17, 21, 0, Zone::Fixed(-4 * 3_600)),
+            "2026-08-18T01:00:00Z"
+        );
+    }
+
+    #[test]
     fn a_stamp_cannot_be_built_out_of_impossible_parts() {
-        assert_eq!(to_stamp(2026, 2, 31, 25, 99), "2026-02-28T23:59:00Z");
+        assert_eq!(to_stamp(2026, 2, 31, 25, 99, UTC), "2026-02-28T23:59:00Z");
         assert!(youtube::publish::is_rfc3339_utc(&to_stamp(
-            2026, 13, 0, 0, 0
+            2026, 13, 0, 0, 0, MOSCOW
         )));
     }
 
     #[test]
     fn a_stamp_round_trips_so_reopening_the_picker_lands_where_it_was_left() {
-        let stamp = to_stamp(2026, 8, 17, 14, 30);
-        assert_eq!(from_stamp(&stamp), Some((2026, 8, 17, 14, 30)));
+        for zone in [UTC, MOSCOW, Zone::Fixed(-7 * 3_600), Zone::Local] {
+            let stamp = to_stamp(2026, 8, 17, 14, 30, zone);
+            assert_eq!(
+                from_stamp(&stamp, zone),
+                Some((2026, 8, 17, 14, 30)),
+                "{zone:?}"
+            );
+        }
         assert_eq!(
-            from_stamp("2024-02-29T00:00:00Z"),
+            from_stamp("2024-02-29T00:00:00Z", UTC),
             Some((2024, 2, 29, 0, 0))
         );
     }
 
     #[test]
     fn a_stamp_that_is_not_one_reads_as_nothing_rather_than_as_a_wrong_date() {
-        assert_eq!(from_stamp(""), None);
-        assert_eq!(from_stamp("tomorrow"), None);
-        assert_eq!(from_stamp("2026-13-01T00:00:00Z"), None, "no such month");
-        assert_eq!(from_stamp("2023-02-29T00:00:00Z"), None, "not a leap year");
-        assert_eq!(from_stamp("2026-08-17T24:00:00Z"), None, "no such hour");
+        assert_eq!(from_stamp("", UTC), None);
+        assert_eq!(from_stamp("tomorrow", UTC), None);
+        assert_eq!(
+            from_stamp("2026-13-01T00:00:00Z", UTC),
+            None,
+            "no such month"
+        );
+        assert_eq!(
+            from_stamp("2023-02-29T00:00:00Z", UTC),
+            None,
+            "not a leap year"
+        );
+        assert_eq!(
+            from_stamp("2026-08-17T24:00:00Z", UTC),
+            None,
+            "no such hour"
+        );
+        assert_eq!(
+            from_stamp("2026-08-17T14:30:00", UTC),
+            None,
+            "local digits with no zone name no instant"
+        );
     }
 
     #[test]

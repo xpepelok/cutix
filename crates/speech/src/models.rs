@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::SpeechError;
 
@@ -190,29 +191,71 @@ pub fn is_voice_cached(voice: &VoiceSpec) -> bool {
     is_file_cached(&cached_voice_path(voice), 1024)
 }
 
+/// Bounds the silence between two reads, not the whole transfer: voices are tens of
+/// MB, but a stalled connection must not hang synthesis forever.
+const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
+const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn download(url: &str, target: &Path, mut on_progress: impl FnMut(f32)) -> Result<(), SpeechError> {
     let directory = target
         .parent()
         .ok_or_else(|| SpeechError::Download("cache path has no parent".to_string()))?;
     fs::create_dir_all(directory).map_err(|error| SpeechError::Download(error.to_string()))?;
 
-    let response = ureq::get(url)
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(DOWNLOAD_CONNECT_TIMEOUT)
+        .timeout_read(DOWNLOAD_READ_TIMEOUT)
+        .build();
+    let response = agent
+        .get(url)
         .call()
         .map_err(|error| SpeechError::Download(error.to_string()))?;
+    if is_html(response.header("Content-Type")) {
+        // A login wall or error page served with 200 would otherwise be cached as the
+        // model and only fail later with an opaque ONNX/JSON parse error.
+        return Err(SpeechError::Download(format!(
+            "{url} answered with an HTML page instead of the file"
+        )));
+    }
 
     let total = response
         .header("Content-Length")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
+        .and_then(|value| value.parse::<u64>().ok());
 
     let file_name = target
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("download");
     let partial = directory.join(format!("{file_name}.part"));
+    let result =
+        write_body(response.into_reader(), &partial, total, &mut on_progress).and_then(|()| {
+            fs::rename(&partial, target).map_err(|error| SpeechError::Download(error.to_string()))
+        });
+    if let Err(error) = result {
+        let _ = fs::remove_file(&partial);
+        return Err(error);
+    }
+    on_progress(1.0);
+    Ok(())
+}
+
+fn is_html(content_type: Option<&str>) -> bool {
+    content_type.is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/html"))
+    })
+}
+
+fn write_body(
+    mut reader: impl Read,
+    partial: &Path,
+    total: Option<u64>,
+    on_progress: &mut impl FnMut(f32),
+) -> Result<(), SpeechError> {
     let mut file =
-        fs::File::create(&partial).map_err(|error| SpeechError::Download(error.to_string()))?;
-    let mut reader = response.into_reader();
+        fs::File::create(partial).map_err(|error| SpeechError::Download(error.to_string()))?;
     let mut buffer = [0u8; 64 * 1024];
     let mut written: u64 = 0;
 
@@ -226,15 +269,19 @@ fn download(url: &str, target: &Path, mut on_progress: impl FnMut(f32)) -> Resul
         std::io::Write::write_all(&mut file, &buffer[..read])
             .map_err(|error| SpeechError::Download(error.to_string()))?;
         written += read as u64;
-        if total > 0 {
+        if let Some(total) = total.filter(|total| *total > 0) {
             on_progress((written as f32 / total as f32).clamp(0.0, 1.0));
         }
     }
 
-    drop(file);
-    fs::rename(&partial, target).map_err(|error| SpeechError::Download(error.to_string()))?;
-    on_progress(1.0);
-    Ok(())
+    if let Some(total) = total
+        && written != total
+    {
+        return Err(SpeechError::Download(format!(
+            "connection closed after {written} of {total} bytes"
+        )));
+    }
+    std::io::Write::flush(&mut file).map_err(|error| SpeechError::Download(error.to_string()))
 }
 
 pub fn ensure_model_downloaded(
@@ -527,6 +574,26 @@ mod tests {
     fn british_voices_are_flagged() {
         assert!(find_voice("bm_george").expect("voice").british);
         assert!(!find_voice("af_heart").expect("voice").british);
+    }
+
+    #[test]
+    fn html_answers_are_not_cached_as_models() {
+        assert!(is_html(Some("text/html; charset=utf-8")));
+        assert!(!is_html(Some("application/octet-stream")));
+        assert!(!is_html(None));
+    }
+
+    #[test]
+    fn a_truncated_download_is_an_error() {
+        let directory =
+            std::env::temp_dir().join(format!("cutix-speech-download-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let partial = directory.join("voice.onnx.part");
+        let error = write_body(&[0u8; 5][..], &partial, Some(9), &mut |_| {}).unwrap_err();
+        assert!(error.to_string().contains("5 of 9"));
+        write_body(&[0u8; 9][..], &partial, Some(9), &mut |_| {}).unwrap();
+        write_body(&[0u8; 9][..], &partial, None, &mut |_| {}).unwrap();
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]

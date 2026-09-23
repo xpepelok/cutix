@@ -23,6 +23,35 @@ fn describe_playback_error(error: &PlaybackError, media_assets: &[MediaAssetData
     }
 }
 
+/// Why a layer was left out of a composed frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DroppedLayer {
+    pub media_id: String,
+    /// The file exists but could not be decoded, as opposed to being missing.
+    pub undecodable: bool,
+}
+
+impl DroppedLayer {
+    /// Reads the first media layer the compositor reported skipping. Other skipped
+    /// reasons (effects without a GPU pass, unsupported stickers) are not the user's
+    /// problem to fix and stay quiet.
+    pub fn from_skipped(skipped: &[String]) -> Option<Self> {
+        skipped.iter().find_map(|reason| {
+            if let Some(id) = reason.strip_prefix("media-missing:") {
+                Some(Self {
+                    media_id: id.to_string(),
+                    undecodable: false,
+                })
+            } else {
+                reason.strip_prefix("media-decode:").map(|id| Self {
+                    media_id: id.to_string(),
+                    undecodable: true,
+                })
+            }
+        })
+    }
+}
+
 const AV_SYNC_TOLERANCE_TICKS: i64 = time::TICKS_PER_SECOND / 20;
 
 const AV_SYNC_MAX_DRIFT_TICKS: i64 = time::TICKS_PER_SECOND * 2;
@@ -283,6 +312,9 @@ pub struct PreviewEngine {
     image_time: MediaTime,
     image_revision: u64,
     pub error: Option<String>,
+    /// A layer the last frame had to leave out because its media file is gone or
+    /// would not decode. The picture still shows, so this is a caption, not an error.
+    pub dropped: Option<DroppedLayer>,
     pending: bool,
 
     requested: Option<(i64, u32, u32)>,
@@ -324,6 +356,7 @@ impl Default for PreviewEngine {
             image_time: MediaTime::ZERO,
             image_revision: 0,
             error: None,
+            dropped: None,
             pending: false,
             requested: None,
             streaming: None,
@@ -367,6 +400,9 @@ impl PreviewEngine {
         self.controller = None;
         self.audio = None;
         self.error = None;
+        // The caption belongs to the last project's frame; the new project's media
+        // has different ids, so a stale one would name a file it never had.
+        self.dropped = None;
 
         if !cfg!(test) {
             match PlaybackController::new(
@@ -395,6 +431,7 @@ impl PreviewEngine {
         self.controller = None;
         self.audio = None;
         self.error = None;
+        self.dropped = None;
         self.frames_per_second = 0.0;
         self.image.take()
     }
@@ -605,6 +642,7 @@ impl PreviewEngine {
         }
         self.rects = composed.rects.clone();
         self.frame_size = (composed.width, composed.height);
+        self.dropped = DroppedLayer::from_skipped(&composed.skipped);
         let stale = self.image.replace(image);
         self.image_time = slot.time;
         self.image_revision = slot.revision;
@@ -712,6 +750,40 @@ mod tests {
             (thumbnail.width as usize) * (thumbnail.height as usize) * 4
         );
         assert!(thumbnail.rgba.iter().all(|byte| *byte == 7));
+    }
+
+    fn dropped_layer() -> DroppedLayer {
+        DroppedLayer {
+            media_id: "gone".to_string(),
+            undecodable: false,
+        }
+    }
+
+    #[test]
+    fn closing_the_preview_forgets_the_dropped_layer_caption() {
+        let mut engine = PreviewEngine {
+            dropped: Some(dropped_layer()),
+            ..PreviewEngine::default()
+        };
+        engine.close();
+        assert!(engine.dropped.is_none());
+    }
+
+    #[test]
+    fn opening_another_project_does_not_carry_the_last_dropped_layer_over() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let store = ProjectStore::new(directory.path().join("cutix"));
+        let project = store.create("Next").expect("create");
+
+        let mut engine = PreviewEngine {
+            dropped: Some(dropped_layer()),
+            ..PreviewEngine::default()
+        };
+        engine.open(&project, None, &store, &[]);
+        assert!(
+            engine.dropped.is_none(),
+            "the caption from the previous project must not show on the new one"
+        );
     }
 
     #[test]

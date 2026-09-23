@@ -60,6 +60,20 @@ impl Session {
         login::sign_out(&mut self.connection, &self.page)
     }
 
+    /// Drops every cookie the profile holds, which ends every Google session in it at
+    /// once — the next sign-in page starts from nothing, with no account to be sent
+    /// straight past. Unlike [`sign_out`], it needs nothing from Google's pages.
+    ///
+    /// [`sign_out`]: Session::sign_out
+    pub fn clear_cookies(&mut self) -> Result<(), Failure> {
+        self.page.call(
+            &mut self.connection,
+            "Network.clearBrowserCookies",
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
     pub fn close(&mut self) {
         self.connection.close_browser();
         self.browser.wait_for_exit(SHUTDOWN_TIMEOUT);
@@ -148,6 +162,125 @@ pub fn sign_in(
             avatar_url: shown.avatar_url,
             avatar_file: None,
             added_at: now,
+            refreshed_at: now,
+            needs_reauth: false,
+        },
+        shown.avatar,
+    ))
+}
+
+/// Re-authenticates an account whose session has gone stale, in its own existing
+/// profile directory rather than a fresh scratch one.
+///
+/// Unlike [`sign_in`], the account id is never re-derived from the channel the
+/// browser lands on: it stays exactly what was passed in. That is what lets a
+/// caller refresh an account in place — no profile move, no new id — so every
+/// queued or history row still keyed to that id stays linked to it.
+pub fn reauth(
+    data_directory: &Path,
+    account_id: &str,
+    now: i64,
+    still_open: &mut dyn FnMut() -> bool,
+) -> Result<(crate::Account, Option<Vec<u8>>), Failure> {
+    let profile = profile_directory(data_directory, account_id);
+    let mut browser = Browser::launch_at(&profile, false, login::SIGN_IN_URL)?;
+    let port = browser.port;
+
+    let watched = {
+        let mut open = || browser.is_running() && still_open();
+        if login::any_tab_signed_in(port) {
+            Ok(())
+        } else {
+            login::watch_for_sign_in(port, &mut open).map(drop)
+        }
+    };
+    // The watch cannot tell a closed window from a pressed Cancel, and reports both as
+    // an abandoned sign-in. An explicit cancel is not a failure worth showing.
+    if !still_open() {
+        return Err(Failure::Cancelled);
+    }
+    watched?;
+
+    let mut connection = Connection::connect(&browser.websocket_url)?;
+    let page = connection.open("about:blank")?;
+    present_as_a_visible_browser(&mut connection, &page);
+
+    let mut session = Session {
+        browser,
+        connection,
+        page,
+    };
+
+    // Keeping the id means trusting that it still names the channel behind these
+    // cookies. Signing in as someone else would otherwise leave every queued task
+    // pointing at this row while the uploads went to a different channel.
+    //
+    // The channel's own page is asked for rather than bare Studio: a Google account that
+    // manages brand channels lands on its default one there, so a brand channel could
+    // never pass this check otherwise.
+    let landed = login::wait_for_channel_at(
+        &mut session.connection,
+        &session.page,
+        &login::channel_studio_url(account_id),
+    );
+    if !still_open() {
+        session.close();
+        return Err(Failure::Cancelled);
+    }
+    let signed_in = match landed {
+        Ok(id) => id,
+        Err(failure) => {
+            session.close();
+            return Err(failure);
+        }
+    };
+    if signed_in != account_id {
+        let landed = session.decorations().title;
+        // The session that was picked by mistake cannot stay: with its cookies in the
+        // profile, the next "Sign in again" would be forwarded straight to Studio and
+        // land on the same wrong channel within seconds, with no chance to choose
+        // another account. Nothing of value goes with it — this profile belongs to
+        // this one row, and its own session was already dead. The cookie wipe cannot
+        // be told "no" by a page; Google's sign-out is the fallback if DevTools
+        // refuses the call.
+        if session.clear_cookies().is_err() {
+            let _ = session.sign_out();
+        }
+        session.close();
+        let named = if landed.trim().is_empty() {
+            signed_in
+        } else {
+            landed
+        };
+        return Err(Failure::WrongChannel(named));
+    }
+
+    let mut shown = Decorations::default();
+    for _ in 0..DECORATION_ATTEMPTS {
+        if !still_open() {
+            break;
+        }
+        std::thread::sleep(DECORATION_INTERVAL);
+        shown = session.decorations();
+        if !shown.title.trim().is_empty() {
+            break;
+        }
+    }
+    session.close();
+    // A cancel pressed after the channel checked out still wins: the row is only
+    // brought back to life by a re-authorisation the person let finish.
+    if !still_open() {
+        return Err(Failure::Cancelled);
+    }
+
+    Ok((
+        crate::Account {
+            id: account_id.to_string(),
+            title: shown.title,
+            handle: shown.handle,
+            avatar_url: shown.avatar_url,
+            avatar_file: None,
+            added_at: 0,
             refreshed_at: now,
             needs_reauth: false,
         },

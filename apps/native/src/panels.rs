@@ -247,6 +247,9 @@ fn caption_style_label(id: &str) -> String {
 }
 
 pub const SETTINGS_MODAL_WIDTH_PX: f32 = 560.0;
+/// The settings card keeps one height for every tab: sized to its content, the
+/// centred card would jump under the pointer each time a taller or shorter tab opens.
+pub const SETTINGS_MODAL_HEIGHT_PX: f32 = 640.0;
 
 pub const MISC_TABS: &[(&str, &str)] = &[
     ("project-info", "settings.tab.projectInfo"),
@@ -3211,14 +3214,28 @@ impl AssetsPanel {
         (480.0, (140.0 + notice + list.min(430.0)).round())
     }
 
-    pub fn youtube_wants_to_close(&mut self) -> bool {
-        let waiting = self
-            .youtube
+    /// Whether a queued upload is waiting its turn or being worked on.
+    fn upload_waiting(&self) -> bool {
+        self.youtube
             .queue
             .visible()
             .into_iter()
-            .any(|task| task.state.is_active());
-        crate::youtube_ui::render::set_uploading(waiting || !self.youtube.running.is_empty());
+            .any(|task| task.state.is_active())
+    }
+
+    /// Tells the render helpers what is in flight, for the parts of the app that
+    /// cannot see this panel: the window's close button and the update pill.
+    fn publish_activity_flags(&self) {
+        crate::youtube_ui::render::set_uploading(
+            self.upload_waiting() || !self.youtube.running.is_empty(),
+        );
+        crate::youtube_ui::render::set_signing_in(
+            self.youtube.signing_in || self.youtube.reauthing.is_some(),
+        );
+    }
+
+    pub fn youtube_wants_to_close(&mut self) -> bool {
+        let waiting = self.upload_waiting();
         let closing = self.youtube.should_close
             && self.youtube.form.is_none()
             && self.youtube.running.is_empty()
@@ -3238,6 +3255,7 @@ impl AssetsPanel {
     ) -> Vec<gpui::AnyElement> {
         self.take_requests(cx);
         self.publish_upload_summary(cx);
+        self.publish_activity_flags();
         if self.youtube.form.is_some() {
             self.advance_publish_preview(cx);
         }
@@ -3248,28 +3266,52 @@ impl AssetsPanel {
         let now = youtube::now_unix();
         let mut dialogs = Vec::new();
         if let Some(modal) = self.settings_modal(window, cx) {
-            dialogs.push(crate::youtube_ui::render::overlay(window, modal));
+            dialogs.push(crate::youtube_ui::render::overlay(
+                window,
+                "yt-settings",
+                modal,
+            ));
         }
         if let Some(dialog) =
             crate::youtube_ui::render::published_dialog(&mut self.youtube, colors, cx)
         {
-            dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
+            dialogs.push(crate::youtube_ui::render::overlay(
+                window,
+                "yt-published",
+                dialog,
+            ));
         } else if let Some(dialog) =
             crate::youtube_ui::render::session_dialog(&mut self.youtube, colors, cx)
         {
-            dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
+            dialogs.push(crate::youtube_ui::render::overlay(
+                window,
+                "yt-session",
+                dialog,
+            ));
         } else if let Some(dialog) =
             crate::youtube_ui::render::account_picker(&mut self.youtube, colors, cx)
         {
-            dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
+            dialogs.push(crate::youtube_ui::render::overlay(
+                window,
+                "yt-picker",
+                dialog,
+            ));
         } else if let Some(dialog) =
             crate::youtube_ui::render::sign_in_dialog(&self.youtube, colors, window, cx)
         {
-            dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
+            dialogs.push(crate::youtube_ui::render::overlay(
+                window,
+                "yt-sign-in",
+                dialog,
+            ));
         } else if let Some(dialog) =
             crate::youtube_ui::render::publish_dialog(&mut self.youtube, colors, now, window, cx)
         {
-            dialogs.push(crate::youtube_ui::render::overlay(window, dialog));
+            dialogs.push(crate::youtube_ui::render::overlay(
+                window,
+                "yt-publish",
+                dialog,
+            ));
         }
         self.youtube.expire_toasts();
         if !self.youtube.toasts.is_empty() {
@@ -3293,6 +3335,8 @@ impl AssetsPanel {
             .w_full()
             .child(
                 div()
+                    // Same inset as the section title and hint around it.
+                    .px(px(4.0))
                     .text_size(rem(TEXT_XS))
                     .text_color(colors.muted_foreground)
                     .truncate()
@@ -3414,6 +3458,12 @@ impl AssetsPanel {
             window,
             cx,
         );
+        // Switching tabs fades the new page in rather than snapping it.
+        let body = crate::appear::fade(
+            body,
+            SharedString::from(format!("settings-page-{}", APP_SETTINGS_TABS[active].0)),
+            crate::appear::PAGE,
+        );
 
         Some(
             div()
@@ -3437,6 +3487,7 @@ impl AssetsPanel {
                     div()
                         .w(px(SETTINGS_MODAL_WIDTH_PX))
                         .max_w(gpui::relative(0.92))
+                        .h(px(SETTINGS_MODAL_HEIGHT_PX))
                         .max_h(gpui::relative(0.86))
                         .flex()
                         .flex_col()
@@ -3488,21 +3539,32 @@ impl AssetsPanel {
         )
     }
 
+    /// Closes the topmost YouTube or settings window, as Escape does. Each closes the
+    /// same way its own Close button would — in publish-only mode a form that merely
+    /// vanished would leave a blank window that never asks to close.
     pub fn dismiss_youtube_overlays(&mut self) -> bool {
         let open = self.youtube.sign_in_form.is_some()
             || self.youtube.form.is_some()
             || self.settings_open;
         if self.youtube.sign_in_form.is_some() {
-            if let Some(form) = self.youtube.sign_in_form.as_ref() {
-                form.abandon();
-            }
-            self.youtube.sign_in_form = None;
+            crate::youtube_ui::render::dismiss_sign_in(&mut self.youtube);
         } else if self.youtube.form.is_some() {
-            self.youtube.form = None;
+            self.dismiss_publish_form();
         } else if self.settings_open {
             self.settings_open = false;
         }
         open
+    }
+
+    /// Drops the publish form and whatever led to it (a pending file, the account
+    /// picker), asking the publish-only window to close once nothing is running.
+    fn dismiss_publish_form(&mut self) {
+        self.youtube.should_close =
+            self.youtube.running.is_empty() && self.youtube.session.is_empty();
+        self.youtube.form = None;
+        self.youtube.notice = None;
+        self.youtube.choosing_account = false;
+        self.youtube.pending_publish = None;
     }
 
     fn publish_upload_summary(&mut self, cx: &mut Context<Self>) {
@@ -3546,8 +3608,10 @@ impl AssetsPanel {
     }
 
     fn refresh_youtube_statuses(&mut self, _cx: &mut Context<Self>) {
+        // The channel-details fetch is not released here: it releases itself when it
+        // finishes. Clearing it on every frame of the settings page let a new headless
+        // browser start on every frame, each one stopping the last on the same profile.
         self.youtube_refreshed = true;
-        self.youtube.refreshing = false;
     }
 
     pub fn open_settings(&mut self, sub: Option<&str>) {
@@ -3717,34 +3781,14 @@ impl AssetsPanel {
     }
 
     fn ensure_channel_details(&mut self, cx: &mut Context<Self>) {
-        if self.youtube.refreshing {
-            return;
-        }
-
-        let incomplete = |account: &youtube::accounts::Account,
-                          avatars: &crate::youtube_ui::Avatars| {
-            let named = !account.title.trim().is_empty() && account.title != account.id;
-            !named || avatars.get(&account.id).is_none()
-        };
-
-        let active = self.youtube.accounts.active().cloned();
-        let wanted = active
-            .filter(|account| incomplete(account, &self.youtube.avatars))
-            .or_else(|| {
-                self.youtube
-                    .accounts
-                    .accounts
-                    .iter()
-                    .find(|account| incomplete(account, &self.youtube.avatars))
-                    .cloned()
-            });
-
-        let Some(account) = wanted else {
+        // Skips any account whose profile an upload or a sign-in has open: the headless
+        // browser would stop theirs on launch.
+        let Some(id) = self.youtube.account_to_refresh() else {
             return;
         };
-        let id = account.id.clone();
         let directory = self.youtube.directory.clone();
-        self.youtube.refreshing = true;
+        self.youtube.refreshing = Some(id.clone());
+        self.youtube.refresh_tried.push(id.clone());
 
         cx.spawn(async move |this, cx| {
             let found = cx
@@ -3755,7 +3799,12 @@ impl AssetsPanel {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.youtube.refreshing = false;
+                if this.youtube.is_refreshing(&id) {
+                    this.youtube.refreshing = None;
+                }
+                // Uploads held back while this profile was open can start now, whatever
+                // the fetch found.
+                this.pump_youtube_queue(cx);
                 let Ok(youtube::session::ChannelDecorations {
                     title,
                     handle,
@@ -3763,6 +3812,7 @@ impl AssetsPanel {
                     avatar,
                 }) = found
                 else {
+                    cx.notify();
                     return;
                 };
                 if let Some(account) = this
@@ -3891,6 +3941,18 @@ impl AssetsPanel {
                             this.youtube.store_avatar(&id, &bytes);
                         }
 
+                        // The channel signed into is one an upload, a refresh or a
+                        // re-auth has open right now: adopting the scratch profile
+                        // would delete theirs from under the browser. The scratch
+                        // copy is dropped and the account stays as it was.
+                        if this.youtube.profile_in_use(&id) {
+                            let _ = std::fs::remove_dir_all(&profile);
+                            this.youtube.sign_in_form = None;
+                            this.youtube.notice = Some(t("youtube.accounts.busy"));
+                            cx.notify();
+                            return;
+                        }
+
                         if let Err(error) =
                             crate::youtube_ui::adopt_profile(&this.youtube.directory, &profile, &id)
                         {
@@ -3915,6 +3977,64 @@ impl AssetsPanel {
                         }
                     },
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_youtube_reauth(&mut self, account_id: &str, cx: &mut Context<Self>) {
+        if self.youtube.is_reauthing(account_id) {
+            return;
+        }
+        if !self.youtube.is_configured() {
+            self.youtube.notice = Some(t("youtube.error.noBrowser"));
+            cx.notify();
+            return;
+        }
+
+        // Refused while another re-authorisation is open, and while an upload or a
+        // refresh has this profile: the visible browser would stop theirs on launch.
+        let cancel = match self.youtube.begin_reauth(account_id) {
+            Ok(cancel) => cancel,
+            Err(notice) => {
+                self.youtube.notice = Some(notice);
+                cx.notify();
+                return;
+            }
+        };
+        cx.notify();
+
+        let directory = self.youtube.directory.clone();
+        let now = youtube::now_unix();
+        let account_id = account_id.to_string();
+        let worker_id = account_id.clone();
+
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_spawn(async move {
+                    crate::youtube_ui::reauth(&directory, &worker_id, now, &cancel)
+                })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.youtube.end_reauth(&account_id);
+                match outcome {
+                    // A row removed while the window was open stays removed; merging
+                    // keeps the name and avatar the page did not get round to showing.
+                    Ok((account, avatar)) => {
+                        this.youtube
+                            .reauthorised(account, avatar, youtube::now_unix());
+                    }
+                    // The person closed it on purpose; there is nothing to report.
+                    Err(failure) if failure.is_cancelled() => {}
+                    Err(failure) => {
+                        this.youtube.notice = Some(crate::youtube_ui::failure_message(&failure));
+                    }
+                }
+                // Uploads held back while the profile was open go now: the ones put back
+                // in line start, and any for a session still dead are told to sign in.
+                this.pump_youtube_queue(cx);
                 cx.notify();
             });
         })
@@ -3949,35 +4069,15 @@ impl AssetsPanel {
     }
 
     fn start_one_upload(&mut self, cx: &mut Context<Self>) -> bool {
-        let running: Vec<String> = self
-            .youtube
-            .running
-            .iter()
-            .map(|running| running.task_id.clone())
-            .collect();
-        let busy_accounts: Vec<String> = self
-            .youtube
-            .running
-            .iter()
-            .filter_map(|running| {
-                self.youtube
-                    .queue
-                    .get(&running.task_id)
-                    .map(|task| task.account_id.clone())
-            })
-            .collect();
-        let Some(task) = self
-            .youtube
-            .queue
-            .visible()
-            .into_iter()
-            .find(|task| {
-                matches!(task.state, youtube::TaskState::Waiting)
-                    && !running.contains(&task.id)
-                    && !busy_accounts.contains(&task.account_id)
-            })
-            .cloned()
-        else {
+        // An account already known to be signed out gets no browser: each of its uploads
+        // would only open one to find the same dead session.
+        if self.youtube.fail_stale_sessions() {
+            self.youtube.save_queue();
+            cx.notify();
+        }
+        // Nor does a profile a sign-in or a refresh has open, since launching on it
+        // would stop theirs; those uploads wait for it to be released.
+        let Some(task) = self.youtube.next_startable() else {
             return false;
         };
         if !self.youtube.is_configured() {
@@ -4008,6 +4108,7 @@ impl AssetsPanel {
         self.youtube.queue.start(&task.id);
         self.youtube.running.push(crate::youtube_ui::Running {
             task_id: task.id.clone(),
+            account_id: task.account_id.clone(),
             job: std::sync::Arc::clone(&job),
             cancel: std::sync::Arc::clone(&cancel),
         });
@@ -4018,7 +4119,6 @@ impl AssetsPanel {
         let worker_job = std::sync::Arc::clone(&job);
         let worker_cancel = std::sync::Arc::clone(&cancel);
         let worker = task.clone();
-        let task_id = task.id.clone();
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_spawn(async move {
@@ -4034,7 +4134,7 @@ impl AssetsPanel {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.finish_youtube_task(&task_id, outcome, cx);
+                this.finish_youtube_task(task, outcome, cx);
             });
         })
         .detach();
@@ -4042,19 +4142,24 @@ impl AssetsPanel {
         true
     }
 
+    /// Settles an upload that ended. `started` is the task as it was when its browser
+    /// was launched.
     fn finish_youtube_task(
         &mut self,
-        task_id: &str,
+        started: youtube::Task,
         outcome: Result<String, youtube::Failure>,
         cx: &mut Context<Self>,
     ) {
+        let id = started.id.clone();
+        let task_id = id.as_str();
         self.youtube.sync_running();
         self.youtube
             .running
             .retain(|running| running.task_id != task_id);
-        let Some(task) = self.youtube.queue.get(task_id).cloned() else {
-            return;
-        };
+        // The row can be gone by the time the browser finishes — removed while it ran,
+        // or pushed out of the stored queue. A video that did go up still gets its
+        // history entry and its announcement, from what the task was at launch.
+        let task = self.youtube.queue.get(task_id).cloned().unwrap_or(started);
         let now = youtube::now_unix();
 
         match outcome {
@@ -4157,11 +4262,18 @@ impl AssetsPanel {
                 let selected = index == active;
                 div()
                     .id(SharedString::from(format!("settings-tab-{id}")))
+                    // The highlight below is laid out as one equal share of the row,
+                    // so a tab may never grow past its share: without `min_w_0` a
+                    // flex item refuses to shrink below its label, and a long label
+                    // ("Infos du projet") would push the highlight off its tab.
                     .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
                     .flex()
                     .items_center()
                     .justify_center()
                     .py(px(5.0))
+                    .px(px(4.0))
                     .rounded(rem(RADIUS_SM))
                     .cursor_pointer()
                     .text_size(rem(TEXT_XS))
@@ -4170,19 +4282,29 @@ impl AssetsPanel {
                     } else {
                         colors.muted_foreground
                     })
-                    .bg(if selected {
-                        opacity(colors.accent, 0.8)
-                    } else {
-                        opacity(colors.accent, 0.0)
-                    })
-                    .child(t(label))
+                    .child(div().truncate().child(t(label)))
                     .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
                         pick(this, index);
                         cx.notify();
                     }))
             })
             .collect::<Vec<_>>();
-        div().flex().w_full().gap(px(4.0)).children(tabs)
+        // One highlight glides between the tabs instead of each tab lighting up on
+        // its own, keyed by the group's first tab so two strips never share a slide.
+        let highlight = crate::appear::segment_highlight(
+            group.first().map_or("settings-tabs", |(id, _)| *id),
+            active,
+            group.len(),
+            div()
+                .rounded(rem(RADIUS_SM))
+                .bg(opacity(colors.accent, 0.8)),
+        );
+        div()
+            .relative()
+            .flex()
+            .w_full()
+            .child(highlight)
+            .children(tabs)
     }
 
     fn misc_body(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
@@ -4391,19 +4513,24 @@ impl AssetsPanel {
                         ),
                     )
                     .child(self.group_title(colors, t("settings.theme")))
+                    // Both themes side by side like the languages above, the current
+                    // one lit, rather than one stretched pill that reads as a field.
                     .child(
-                        self.pill(
-                            "theme-toggle".to_owned(),
-                            t(if dark { "theme.dark" } else { "theme.light" }),
-                            false,
-                            cx,
-                        )
-                        .on_click(cx.listener(
-                            |this: &mut Self, _, _, cx| {
-                                this.app.update(cx, |model, cx| model.toggle_theme(cx));
-                                cx.notify();
-                            },
-                        )),
+                        div().flex().flex_wrap().w_full().children(
+                            [(true, "theme.dark"), (false, "theme.light")]
+                                .into_iter()
+                                .map(|(wanted, key)| {
+                                    self.pill(format!("theme-{key}"), t(key), dark == wanted, cx)
+                                        .on_click(cx.listener(move |this: &mut Self, _, _, cx| {
+                                            if this.app.read(cx).dark != wanted {
+                                                this.app
+                                                    .update(cx, |model, cx| model.toggle_theme(cx));
+                                            }
+                                            cx.notify();
+                                        }))
+                                })
+                                .collect::<Vec<_>>(),
+                        ),
                     )
                     .child(self.group_title(colors, t("settings.videoDirectory")))
                     .child(self.video_directory_row(colors, cx));
@@ -5018,6 +5145,7 @@ impl crate::youtube_ui::render::Host for AssetsPanel {
                 }
             }
             Action::ChooseAccount(id) => self.choose_publish_account(id, cx),
+            Action::ReauthAccount(id) => self.start_youtube_reauth(&id, cx),
             Action::DismissPublished => self.youtube.published = None,
 
             Action::CloseSession => {
@@ -5077,15 +5205,7 @@ impl crate::youtube_ui::render::Host for AssetsPanel {
             Action::HoverVolume(over) => {
                 self.youtube.volume_open = over;
             }
-            Action::Dismiss => {
-                self.youtube.should_close =
-                    self.youtube.running.is_empty() && self.youtube.session.is_empty();
-                self.youtube.form = None;
-                self.youtube.notice = None;
-
-                self.youtube.choosing_account = false;
-                self.youtube.pending_publish = None;
-            }
+            Action::Dismiss => self.dismiss_publish_form(),
         }
         cx.notify();
     }
@@ -7581,6 +7701,16 @@ impl Render for PreviewPanel {
             }
         }
         let error = self.app.read(cx).preview.error.clone();
+        let dropped = self.app.read(cx).preview.dropped.clone().map(|dropped| {
+            let model = self.app.read(cx);
+            match model.media_asset(&dropped.media_id) {
+                Some(asset) if dropped.undecodable => {
+                    t_args("preview.mediaUndecodable", &[("name", &asset.name)])
+                }
+                Some(asset) => t_args("preview.mediaMissing", &[("name", &asset.name)]),
+                None => t("preview.mediaMissing.unknown"),
+            }
+        });
         let zoom = self.zoom_percent.map_or(1.0, |percent| {
             let fit = crate::theme::fit_scale(self.viewport, canvas);
             if fit > 0.0 {
@@ -7710,6 +7840,32 @@ impl Render for PreviewPanel {
                         .children(mask_box)
                         .children(tracking_box)
                         .children(snap)
+                        .when_some(dropped, |this, message| {
+                            // The frame still shows, minus one layer: a caption in the
+                            // corner says which, without covering the picture. The
+                            // corner anchor sits on a wrapper: the toast rise repositions
+                            // the element it animates, which would undo `absolute`.
+                            this.child(
+                                div()
+                                    .absolute()
+                                    .bottom(px(10.0))
+                                    .left(px(10.0))
+                                    .max_w(relative(0.8))
+                                    .child(crate::appear::toast(
+                                        div()
+                                            .px(px(10.0))
+                                            .py(px(5.0))
+                                            .rounded(rem(RADIUS_SM))
+                                            .border_1()
+                                            .border_color(opacity(colors.caution, 0.5))
+                                            .bg(opacity(gpui::black(), 0.7))
+                                            .text_size(rem(TEXT_XS))
+                                            .text_color(colors.caution)
+                                            .child(message),
+                                        "preview-dropped-layer",
+                                    )),
+                            )
+                        })
                         .when_some(error, |this, message| {
                             this.child(
                                 div()

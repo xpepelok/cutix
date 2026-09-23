@@ -49,6 +49,7 @@ pub use queue::{FrameSlot, PlaybackGeneration};
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::{
     CacheBytes, ComposeRequest, ComposedFrame, ElementRect, FrameComposer, PendingFrame,
+    missing_media,
 };
 pub use text_render::{TextLayer, TextRasterizer};
 #[cfg(not(target_arch = "wasm32"))]

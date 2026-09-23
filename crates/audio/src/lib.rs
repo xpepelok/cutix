@@ -94,11 +94,16 @@ pub fn ducking_envelope(voice: &[f32], options: &DuckingOptions) -> Vec<GainPoin
         }
         let boundary = index as f32 * seconds_per_frame;
         if held[index] {
-            push(
-                (boundary - options.attack_seconds).max(0.0),
-                1.0,
-                &mut points,
-            );
+            let attack_start = (boundary - options.attack_seconds).max(0.0);
+            // A phrase that follows the previous one closer than release + attack arrives
+            // while the gain is still recovering. Cut that release short where the attack
+            // begins and duck from wherever the ramp had got to; appending the full release
+            // would leave points out of time order and make `gain_at` jump around.
+            let gain = gain_at(&points, attack_start);
+            while points.last().is_some_and(|last| last.time > attack_start) {
+                points.pop();
+            }
+            push(attack_start, gain, &mut points);
             push(boundary, duck_gain, &mut points);
         } else {
             push(boundary, duck_gain, &mut points);
@@ -333,6 +338,30 @@ mod tests {
         for pair in points.windows(2) {
             assert!(pair[1].time >= pair[0].time, "unsorted: {pair:?}");
         }
+    }
+
+    #[test]
+    fn a_phrase_during_the_release_keeps_the_envelope_sorted_and_ducked() {
+        // The gap is longer than the hold, so the gain starts to recover, but shorter than
+        // hold + release + attack, so the next attack begins before the release finishes.
+        let mut voice = speech_burst(48_000, 5.0, 1.0, 1.5);
+        let second = speech_burst(48_000, 5.0, 2.0, 2.5);
+        for (index, value) in second.iter().enumerate() {
+            voice[index] += value;
+        }
+        let points = ducking_envelope(&voice, &DuckingOptions::default());
+        for pair in points.windows(2) {
+            assert!(pair[1].time >= pair[0].time, "unsorted: {points:?}");
+        }
+        assert!(
+            gain_at(&points, 1.25) < 0.3,
+            "ducked during the first phrase"
+        );
+        assert!(
+            gain_at(&points, 2.25) < 0.3,
+            "ducked during the second phrase"
+        );
+        assert!(gain_at(&points, 4.5) > 0.9, "open again after both phrases");
     }
 
     #[test]

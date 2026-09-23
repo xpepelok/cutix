@@ -46,8 +46,9 @@ pub struct Mp4Sink {
     destination: PathBuf,
     spec: VideoSpec,
     writer: Option<Mp4Writer<BufWriter<File>>>,
+    /// The video track's and the movie's timescale; see [`video_timescale`].
+    video_timescale: u32,
     track_added: bool,
-    sample_duration: u32,
     frames: u64,
     audio_frames: u64,
     audio_path: Option<PathBuf>,
@@ -64,16 +65,15 @@ impl Mp4Sink {
                 height: spec.height,
             });
         }
-        let fps = spec
-            .frame_rate
-            .as_f64()
-            .filter(|value| *value > 0.0)
-            .ok_or(ExportError::InvalidFrameRate)?;
-        let sample_duration = ((TIMESCALE as f64) / fps).round() as u32;
-        if sample_duration == 0 {
+        // A rate above the timescale would give some frames no duration at all.
+        let rate = spec.frame_rate;
+        if !rate.is_valid()
+            || u64::from(rate.numerator) > TIMESCALE as u64 * u64::from(rate.denominator)
+        {
             return Err(ExportError::InvalidFrameRate);
         }
 
+        let video_timescale = video_timescale(rate);
         let file = File::create(destination).map_err(|error| ExportError::Io {
             path: destination.display().to_string(),
             detail: error.to_string(),
@@ -89,7 +89,9 @@ impl Mp4Sink {
                     str::parse("avc1").unwrap_or_default(),
                     str::parse("mp41").unwrap_or_default(),
                 ],
-                timescale: TIMESCALE,
+                // The movie shares the video track's clock, so the video's durations carry
+                // over exactly, and the audio's 90 kHz ones scale by a whole factor.
+                timescale: video_timescale,
             },
         )
         .map_err(|error| ExportError::Muxer(error.to_string()))?;
@@ -98,8 +100,8 @@ impl Mp4Sink {
             destination: destination.to_path_buf(),
             spec,
             writer: Some(writer),
+            video_timescale,
             track_added: false,
-            sample_duration,
             frames: 0,
             audio_frames: 0,
             audio_path: None,
@@ -122,7 +124,7 @@ impl Mp4Sink {
             writer
                 .add_track(&TrackConfig {
                     track_type: TrackType::Video,
-                    timescale: TIMESCALE,
+                    timescale: self.video_timescale,
                     language: "und".to_owned(),
                     media_conf: MediaConfig::AvcConfig(AvcConfig {
                         width: self.spec.width as u16,
@@ -137,12 +139,15 @@ impl Mp4Sink {
 
         let writer = self.writer.as_mut().expect("writer");
         for sample in self.pending.drain(..) {
+            let rate = self.spec.frame_rate;
+            let start_time = frame_start(rate, self.frames, self.video_timescale);
+            let duration = frame_start(rate, self.frames + 1, self.video_timescale) - start_time;
             writer
                 .write_sample(
                     1,
                     &Mp4Sample {
-                        start_time: self.frames * self.sample_duration as u64,
-                        duration: self.sample_duration,
+                        start_time,
+                        duration: duration as u32,
                         rendering_offset: 0,
                         is_sync: sample.is_sync,
                         bytes: Bytes::from(sample.bytes),
@@ -369,6 +374,50 @@ pub(crate) fn patch_sl_config_predefined(path: &Path) -> Result<bool> {
     Ok(patched)
 }
 
+/// The largest multiple of [`TIMESCALE`] the video track is given. Enough for every
+/// NTSC rate (x2 at 59.94, x4 at 23.976); an odd rate that needs more keeps 90 kHz.
+const MAX_TIMESCALE_MULTIPLE: u64 = 16;
+
+/// The video track's timescale: the smallest multiple of [`TIMESCALE`] in which a frame
+/// lasts a whole number of units, so every frame has the same duration.
+///
+/// At 90 kHz a 59.94 fps frame is 1501.5 units and the durations alternate 1502, 1501,
+/// which the mp4 crate writes as one `stts` entry per frame; its reader then scans that
+/// table linearly for every sample, and re-importing an hour of such an export costs
+/// O(n^2). At 180 kHz the frame is a constant 3003 units and `stts` is a single entry.
+/// Audio stays at 90 kHz, which divides this exactly.
+fn video_timescale(rate: time::FrameRate) -> u32 {
+    let numerator = u64::from(rate.numerator);
+    let per_frame = u64::from(TIMESCALE) * u64::from(rate.denominator);
+    let multiple = numerator / gcd(numerator, per_frame).max(1);
+    if (1..=MAX_TIMESCALE_MULTIPLE).contains(&multiple) {
+        TIMESCALE * multiple as u32
+    } else {
+        TIMESCALE
+    }
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// Where frame `index` starts on the video track, in units of `timescale`.
+///
+/// Computed from the exact rational rate for every frame instead of summing a per-frame
+/// duration rounded once, which drifts: adding 1502 at 90 kHz for 59.94 fps puts the
+/// picture a full second behind the audio after about fifty minutes. With the timescale
+/// from [`video_timescale`] every frame lasts the same; for a rate that fell back to
+/// 90 kHz the durations are the differences between successive starts, so they vary as
+/// needed and never accumulate error. The rate must be valid.
+fn frame_start(rate: time::FrameRate, index: u64, timescale: u32) -> u64 {
+    let numerator = u128::from(rate.numerator);
+    let scaled = u128::from(index) * u128::from(timescale) * u128::from(rate.denominator);
+    ((scaled + numerator / 2) / numerator) as u64
+}
+
 /// The H.264 parameter sets carried by a bitstream: `(sequence set, picture set)`.
 type ParameterSets = (Vec<u8>, Vec<u8>);
 
@@ -462,6 +511,68 @@ mod tests {
             Some(ExportError::InvalidSize { .. })
         ));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn frame_starts_follow_the_exact_rate_without_drifting() {
+        let rate = time::FrameRate::FPS_59_94;
+        // 60 000 frames at 59.94 fps last exactly 1001 seconds.
+        assert_eq!(
+            frame_start(rate, 60_000, TIMESCALE),
+            1_001 * u64::from(TIMESCALE)
+        );
+        let durations: Vec<u64> = (0..4)
+            .map(|index| {
+                frame_start(rate, index + 1, TIMESCALE) - frame_start(rate, index, TIMESCALE)
+            })
+            .collect();
+        assert_eq!(durations, vec![1_502, 1_501, 1_502, 1_501]);
+        // Whole-unit rates keep their plain duration.
+        assert_eq!(
+            frame_start(time::FrameRate::FPS_30, 7, TIMESCALE),
+            7 * 3_000
+        );
+        assert_eq!(
+            frame_start(time::FrameRate::FPS_23_976, 24, TIMESCALE),
+            90_090
+        );
+    }
+
+    #[test]
+    fn ntsc_rates_get_a_timescale_with_a_constant_frame_duration() {
+        for (rate, timescale, duration) in [
+            (time::FrameRate::FPS_59_94, 180_000, 3_003),
+            (time::FrameRate::FPS_23_976, 360_000, 15_015),
+            (time::FrameRate::FPS_30, 90_000, 3_000),
+            (
+                time::FrameRate {
+                    numerator: 30_000,
+                    denominator: 1_001,
+                },
+                90_000,
+                3_003,
+            ),
+        ] {
+            assert_eq!(video_timescale(rate), timescale, "{rate:?}");
+            // Every frame the same length, so `stts` collapses to one entry, and the
+            // audio's 90 kHz converts to the movie clock by a whole factor.
+            for index in [0, 1, 2, 999, 215_999] {
+                let span =
+                    frame_start(rate, index + 1, timescale) - frame_start(rate, index, timescale);
+                assert_eq!(span, duration, "{rate:?} frame {index}");
+            }
+            assert_eq!(timescale % TIMESCALE, 0);
+        }
+    }
+
+    #[test]
+    fn a_rate_needing_a_huge_timescale_keeps_ninety_kilohertz() {
+        // 90 001 frames over 1000 s: whole-unit frames would need a 90 001x timescale.
+        let rate = time::FrameRate {
+            numerator: 90_001,
+            denominator: 1_000,
+        };
+        assert_eq!(video_timescale(rate), TIMESCALE);
     }
 
     #[test]

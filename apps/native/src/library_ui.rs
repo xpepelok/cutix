@@ -23,6 +23,9 @@ use crate::theme::{
 };
 
 const CARD_GUTTER_PX: f32 = 8.0;
+/// How long after the grid fills in that its rows still rise in: long enough for the
+/// capped stagger to finish.
+const LIBRARY_REVEAL_WINDOW: Duration = Duration::from_millis(900);
 const METADATA_BATCH: usize = 48;
 const RESCAN_NOTICE: Duration = Duration::from_millis(1_600);
 const MENU_PAD_PX: f32 = 4.0;
@@ -376,7 +379,15 @@ pub struct LibraryView {
     view: ViewMode,
     metadata_busy: bool,
     visible: Vec<Entry>,
-    visible_key: Option<(u64, usize, String, &'static str, bool)>,
+    visible_key: Option<(u64, usize, String, &'static str, bool, &'static str)>,
+    /// When the grid last filled in or was reordered, with a counter that keys the
+    /// entrance so a later reorder replays it. The grid is virtualised, so rows are
+    /// only wrapped in the entrance for a short window: past it, rows scrolled into
+    /// view just appear instead of rising in again.
+    reveal: Option<(u64, std::time::Instant)>,
+    reveals: u64,
+    /// The entrance the rows were wrapped in on the last frame, if any.
+    wrapped: Option<u64>,
     revision: u64,
     rescanned_at: Option<Instant>,
 }
@@ -448,6 +459,9 @@ impl LibraryView {
             metadata_busy: false,
             visible: Vec::new(),
             visible_key: None,
+            reveal: None,
+            reveals: 0,
+            wrapped: None,
             revision: 0,
             rescanned_at: None,
         }
@@ -834,17 +848,26 @@ impl LibraryView {
         cx.notify();
     }
 
-    fn refresh_visible(&mut self) {
+    fn refresh_visible(&mut self, root: &std::path::Path) {
         let key = (
             self.revision,
             self.entries.len(),
             self.query.buffer.text.clone(),
             self.sort.id(),
             self.ascending,
+            self.grouping.id(),
         );
         if self.visible_key.as_ref() == Some(&key) {
             return;
         }
+        // A search narrowing the grid and a single delete stay still; filling an
+        // empty grid or changing its order is when the cards rise in.
+        let reordered = self
+            .visible_key
+            .as_ref()
+            .is_some_and(|old| (old.3, old.4, old.5) != (key.3, key.4, key.5));
+        let first_fill =
+            self.visible.is_empty() && self.visible_key.as_ref().map(|old| old.1) != Some(key.1);
         let mut shown: Vec<Entry> = self
             .entries
             .iter()
@@ -852,6 +875,21 @@ impl LibraryView {
             .cloned()
             .collect();
         library::arrange(&mut shown, self.sort, self.ascending);
+        // The grid cuts a new group wherever the label changes, so members of a group
+        // have to sit together or the same header shows up several times.
+        match self.grouping {
+            library::Grouping::None => {}
+            library::Grouping::Folder => {
+                library::gather_groups(&mut shown, |entry| library::folder_of(entry, root));
+            }
+            library::Grouping::Day => {
+                library::gather_groups(&mut shown, |entry| format_modified(entry.modified));
+            }
+        }
+        if (reordered || first_fill) && !shown.is_empty() {
+            self.reveals += 1;
+            self.reveal = Some((self.reveals, std::time::Instant::now()));
+        }
         self.visible = shown;
         self.visible_key = Some(key);
     }
@@ -2900,7 +2938,7 @@ impl LibraryView {
         )
     }
 
-    fn player_modal(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn player_modal(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let weight = self
             .player
             .as_ref()
@@ -2911,9 +2949,8 @@ impl LibraryView {
         let name = player
             .path
             .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string();
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let frame = player.frame.clone();
         let fraction = player.fraction();
         let playing = player.playing;
@@ -3349,7 +3386,7 @@ impl LibraryView {
             .or_else(|| self.thumbnails.duration(&entry.path))
     }
 
-    fn delete_dialog(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn delete_dialog(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let victims = self.confirm_bulk.clone();
         let one = self.confirm_delete.clone();
         let many = victims.is_some();
@@ -3526,10 +3563,10 @@ impl Render for LibraryView {
         self.probe_next(cx);
         self.probe_metadata(cx);
         self.sync_player(cx);
-        self.refresh_visible();
+        let root = self.directory(cx);
+        self.refresh_visible(&root);
         let colors = self.colors(cx);
         let entries = std::mem::take(&mut self.visible);
-        let root = self.directory(cx);
         let grouping = self.grouping;
         let header = self.header(&entries, window, cx);
         let sorting = self.sort_menu(cx);
@@ -3626,9 +3663,40 @@ impl Render for LibraryView {
 
             let mut painted: Vec<gpui::AnyElement> = Vec::new();
             let mut measured = false;
-            for row in &plan[first..last] {
-                match row {
-                    GridRow::Header(label) => painted.push(
+            let reveal = self
+                .reveal
+                .filter(|(_, at)| at.elapsed() < LIBRARY_REVEAL_WINDOW)
+                .map(|(generation, _)| generation);
+            // Wrapping the rows in an entrance, or unwrapping them, gives every card a
+            // new element id, and gpui forgets its hover with it: a card the pointer
+            // then leaves never hears so and stays lit, its preview still running.
+            // Forget ours too; the next pointer move lights the card really under it.
+            if reveal != self.wrapped {
+                self.wrapped = reveal;
+                self.transitions
+                    .retain(|key| !key.starts_with("video-") && !key.starts_with("row-"));
+                if !self.volume_dragging
+                    && !self.hover.as_ref().is_some_and(|hover| hover.scrubbing)
+                {
+                    self.hover = None;
+                    self.speaker.forget();
+                }
+            }
+            let rise = |strip: Div, row: usize| -> gpui::AnyElement {
+                match reveal {
+                    Some(generation) => crate::appear::item(
+                        strip,
+                        SharedString::from(format!("library-reveal-{generation}-{row}")),
+                        row - first,
+                    )
+                    .into_any_element(),
+                    None => strip.into_any_element(),
+                }
+            };
+            for (row, entry) in plan[first..last].iter().enumerate() {
+                let row = first + row;
+                match entry {
+                    GridRow::Header(label) => painted.push(rise(
                         div()
                             .h(px(GROUP_HEADER_PX))
                             .flex()
@@ -3637,23 +3705,17 @@ impl Render for LibraryView {
                             .text_size(rem(TEXT_XS))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(colors.muted_foreground)
-                            .child(SharedString::from(label.clone()))
-                            .into_any_element(),
-                    ),
+                            .child(SharedString::from(label.clone())),
+                        row,
+                    )),
                     GridRow::Cards(span) => {
                         if listing {
                             let rows: Vec<_> = entries[span.clone()]
                                 .iter()
                                 .map(|entry| self.list_row(entry, cx))
                                 .collect();
-                            painted.push(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .w_full()
-                                    .children(rows)
-                                    .into_any_element(),
-                            );
+                            painted
+                                .push(rise(div().flex().flex_col().w_full().children(rows), row));
                             continue;
                         }
                         let cards: Vec<_> = entries[span.clone()]
@@ -3665,7 +3727,7 @@ impl Render for LibraryView {
                             measured = true;
                             strip = strip.child(row_probe(cx));
                         }
-                        painted.push(strip.relative().into_any_element());
+                        painted.push(rise(strip.relative(), row));
                     }
                 }
             }
@@ -3781,8 +3843,8 @@ impl Render for LibraryView {
             .child(body)
             .children(sorting)
             .children(menu)
-            .children(confirm)
-            .children(player)
+            .children(confirm.map(|dialog| crate::appear::modal(dialog, "library-delete")))
+            .children(player.map(|modal| crate::appear::modal(modal, "library-player")))
     }
 }
 

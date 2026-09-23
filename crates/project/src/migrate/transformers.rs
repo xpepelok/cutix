@@ -1390,6 +1390,15 @@ pub fn v22_to_v23(mut project: Value) -> MigrationResult {
                 "sourceDuration",
             ],
         );
+        // The transition length is a timeline span like the element timings
+        // above; v26_to_v27 reads it as ticks, so leaving it in seconds turns
+        // a 0.5 s crossfade into a single tick.
+        if let Some(transition) = element
+            .get_mut("transition")
+            .filter(|value| value.is_object())
+        {
+            seconds_to_ticks_fields(transition, &["duration"]);
+        }
 
         let Some(channels) = element
             .get_mut("animations")

@@ -178,6 +178,62 @@ struct Boundary {
     first: u32,
     last: u32,
     origin: u64,
+    /// The requested end of the cut, in the video timescale. Audio ends here too, not at
+    /// `origin + duration`: a start snapped back to a keyframe moves the origin earlier but
+    /// leaves the end where the user put it.
+    end: u64,
+}
+
+/// Whether a cut at `target` starts on the frame after `floor` rather than on `floor`.
+///
+/// The cut starts on the frame nearest the requested time, the way playback picks
+/// frames, rather than the last one at or before it: a cut a hair before a frame
+/// boundary would otherwise keep almost a whole extra frame. Ties keep the earlier one.
+///
+/// A keyframe is the exception: when the floor is one, the request sits within half a
+/// frame of it and the next frame is only marginally nearer (by at most an eighth of a
+/// frame, which happens on a variable-rate source), the cut starts on the keyframe. Moving
+/// off it would turn a cut that can be stream-copied into one that has to be re-encoded
+/// in full. The margin matters: `frame_ticks` is the average frame, and a source averaging
+/// 30 fps may run at 60 locally, so a request 1450 ticks past a keyframe with the next
+/// frame 50 ticks away is well inside half an average frame yet plainly the next frame's.
+fn starts_on_next_frame(
+    target: u64,
+    floor_start: u64,
+    floor_is_sync: bool,
+    next_start: Option<u64>,
+    frame_ticks: u64,
+) -> bool {
+    if floor_start > target {
+        return false;
+    }
+    let past_floor = target - floor_start;
+    let Some(to_next) = next_start
+        .filter(|next_start| *next_start > target)
+        .map(|next_start| next_start - target)
+    else {
+        return false;
+    };
+    if to_next >= past_floor {
+        return false;
+    }
+    let marginally_nearer = past_floor - to_next <= frame_ticks / 8;
+    !(floor_is_sync && past_floor <= frame_ticks / 2 && marginally_nearer)
+}
+
+/// Whether a cut ending at `end` keeps the frame starting at `start`, the last one that
+/// starts before `end`, given that the frame after it starts at `next` (or that frame's own
+/// end, when it is the last of the track).
+///
+/// The same neighbour comparison as [`starts_on_next_frame`], mirrored: the frame is kept
+/// when `end` is strictly nearer `next` than `start`, that is when more of it lies inside
+/// the cut than outside. A tie drops it, which complements
+/// the start's tie keeping the earlier frame, so back-to-back cuts at the same instant
+/// share every frame out exactly once. It needs no average frame length, so a short last
+/// frame of an untouched whole-clip copy is kept, and odd frame lengths (3003 ticks at
+/// 29.97 fps) round the same way at both ends.
+fn keeps_last_frame(end: u64, start: u64, next: u64) -> bool {
+    end.saturating_sub(start) > next.saturating_sub(end)
 }
 
 fn sample_start(reader: &mut Mp4Reader<BufReader<File>>, track: u32, sample: u32) -> Option<u64> {
@@ -282,8 +338,26 @@ fn video_boundary(
     let start_target = ticks_to_timescale(plan.start, timescale);
     let end_target = ticks_to_timescale(plan.end(), timescale);
 
-    let first = last_at_or_before(reader, track, count, start_target)
+    let floor = last_at_or_before(reader, track, count, start_target)
         .ok_or_else(|| ExportError::Encoder("the trim starts past the last frame".to_owned()))?;
+    let floor_sample = reader
+        .read_sample(track, floor)
+        .map_err(|error| ExportError::Muxer(error.to_string()))?
+        .ok_or_else(|| ExportError::Encoder("the first trimmed frame is missing".to_owned()))?;
+    let next_start = (floor < count)
+        .then(|| sample_start(reader, track, floor + 1))
+        .flatten();
+    let first = if starts_on_next_frame(
+        start_target,
+        floor_sample.start_time,
+        floor_sample.is_sync,
+        next_start,
+        frame_ticks,
+    ) {
+        floor + 1
+    } else {
+        floor
+    };
     let sample = reader
         .read_sample(track, first)
         .map_err(|error| ExportError::Muxer(error.to_string()))?
@@ -322,16 +396,37 @@ fn video_boundary(
             ));
         }
     }
-    let _ = frame_ticks;
-
-    let last = last_before(reader, track, count, end_target)
-        .filter(|candidate| *candidate >= first)
-        .unwrap_or(first);
+    // Mirror the nearest-frame start, so a cut ending just past a frame boundary does not
+    // pull in a whole frame of which only a sliver was asked for.
+    let last = match last_before(reader, track, count, end_target) {
+        Some(candidate) => {
+            let candidate_sample = reader
+                .read_sample(track, candidate)
+                .map_err(|error| ExportError::Muxer(error.to_string()))?
+                .ok_or_else(|| {
+                    ExportError::Encoder("the last trimmed frame is missing".to_owned())
+                })?;
+            let next = if candidate < count {
+                sample_start(reader, track, candidate + 1)
+            } else {
+                None
+            }
+            .unwrap_or(candidate_sample.start_time + u64::from(candidate_sample.duration));
+            if keeps_last_frame(end_target, candidate_sample.start_time, next) {
+                candidate
+            } else {
+                candidate.saturating_sub(1)
+            }
+        }
+        None => first,
+    }
+    .max(first);
 
     Ok(Boundary {
         first,
         last,
         origin: sample.start_time,
+        end: end_target,
     })
 }
 
@@ -552,11 +647,7 @@ pub fn run(
         // to the requested cut instead would offset it against the video by exactly the
         // snap distance.
         let origin = rescale(boundary.origin, video_timescale, *timescale);
-        let end_target = origin.saturating_add(rescale(
-            ticks_to_timescale(plan.duration, video_timescale),
-            video_timescale,
-            *timescale,
-        ));
+        let end_target = rescale(boundary.end, video_timescale, *timescale);
 
         // An AAC packet cannot be cut into. The packet straddling the origin carries audio
         // from before it, and copying it — then zeroing its timestamp, as a packet that
@@ -638,6 +729,62 @@ mod tests {
         for name in ["a.webm", "b.mkv", "c"] {
             assert!(!COPYABLE_CONTAINERS.contains(&extension_of(Path::new(name)).as_str()));
         }
+    }
+
+    #[test]
+    fn a_cut_between_frames_starts_on_the_nearest_one() {
+        // Frames 3000 ticks apart; the floor is not a keyframe.
+        assert!(!starts_on_next_frame(1_000, 0, false, Some(3_000), 3_000));
+        assert!(starts_on_next_frame(2_000, 0, false, Some(3_000), 3_000));
+        // Exactly halfway keeps the earlier frame, and no next frame keeps the floor.
+        assert!(!starts_on_next_frame(1_500, 0, false, Some(3_000), 3_000));
+        assert!(!starts_on_next_frame(2_900, 0, false, None, 3_000));
+        assert!(!starts_on_next_frame(0, 100, false, Some(3_000), 3_000));
+    }
+
+    #[test]
+    fn a_cut_near_a_keyframe_stays_on_it_even_when_the_next_frame_is_nearer() {
+        // A variable-rate source: the frame after the keyframe arrived early, so it is
+        // nearer to a cut 0.4 frames in than the keyframe is.
+        assert!(!starts_on_next_frame(1_200, 0, true, Some(2_200), 3_000));
+        assert!(starts_on_next_frame(1_200, 0, false, Some(2_200), 3_000));
+        // Past half a frame the keyframe no longer holds the cut.
+        assert!(starts_on_next_frame(1_600, 0, true, Some(2_200), 3_000));
+    }
+
+    #[test]
+    fn a_keyframe_does_not_hold_a_cut_whose_next_frame_is_far_nearer() {
+        // Averaging 30 fps (3000 ticks) but running at 60 locally: the next frame is 50
+        // ticks from the cut and the keyframe 1450, which is no marginal difference.
+        assert!(starts_on_next_frame(1_450, 0, true, Some(1_500), 3_000));
+        // A difference within an eighth of a frame still stays on the keyframe.
+        assert!(!starts_on_next_frame(1_450, 0, true, Some(2_700), 3_000));
+    }
+
+    #[test]
+    fn a_short_last_frame_of_a_whole_clip_copy_is_kept() {
+        // The last frame starts at 87 000 and lasts 1000 of a 3000-tick average; a cut
+        // ending at its end asked for all of it.
+        assert!(keeps_last_frame(88_000, 87_000, 88_000));
+    }
+
+    #[test]
+    fn back_to_back_cuts_share_every_frame_out_exactly_once() {
+        // 29.97 fps at 90 kHz: 3003-tick frames, an odd length.
+        let frame = 3_003u64;
+        for past in [0, 1, 1_000, 1_501, 1_502, 1_503, 2_000, 3_002] {
+            let end = frame + past;
+            let kept_by_first_cut = keeps_last_frame(end, frame, 2 * frame);
+            let starts_second_cut =
+                !starts_on_next_frame(end, frame, false, Some(2 * frame), frame);
+            assert!(
+                kept_by_first_cut != starts_second_cut,
+                "{past} ticks in: kept {kept_by_first_cut}, starts the next cut {starts_second_cut}"
+            );
+        }
+        // A tie is dropped at the end, matching the start keeping the earlier frame.
+        assert!(!keeps_last_frame(1_500, 0, 3_000));
+        assert!(!starts_on_next_frame(1_500, 0, false, Some(3_000), 3_000));
     }
 
     #[test]

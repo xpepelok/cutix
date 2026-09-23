@@ -371,7 +371,7 @@ fn externalizing_leaves_the_callers_document_alone_but_can_be_asked_for() {
 }
 
 #[test]
-fn deleting_a_cutout_sweeps_its_matte_files_on_the_next_save() {
+fn deleting_a_cutout_sweeps_its_matte_files_once_the_project_is_swept() {
     let (_guard, store) = store();
     let mut project = project_with_inline_cutout(&store, 4);
     store.save(&project).expect("save");
@@ -382,6 +382,9 @@ fn deleting_a_cutout_sweeps_its_matte_files_on_the_next_save() {
         video.cutout = None;
     }
     store.save(&project).expect("save again");
+    // Saving alone keeps them for the undo history; the close/load sweep drops them.
+    assert_eq!(fs::read_dir(&directory).expect("mattes").count(), 5);
+    store.sweep_mattes(&project).expect("sweep");
     assert_eq!(fs::read_dir(&directory).expect("mattes").count(), 0);
 }
 
@@ -406,6 +409,7 @@ fn re_running_a_cutout_drops_the_previous_mattes() {
         }));
     }
     store.save(&project).expect("save again");
+    store.sweep_mattes(&project).expect("sweep");
     let files: Vec<_> = fs::read_dir(&directory)
         .expect("mattes")
         .map(|entry| entry.expect("entry").file_name())
@@ -594,4 +598,51 @@ fn a_project_without_cutouts_is_written_without_copying_the_document() {
         store.load(&project.metadata.id).expect("load").project,
         project
     );
+}
+
+fn matte_file_count(store: &ProjectStore, project: &Project) -> usize {
+    fs::read_dir(store.matte_directory(&project.metadata.id))
+        .map(|entries| entries.count())
+        .unwrap_or(0)
+}
+
+#[test]
+fn saving_keeps_mattes_an_undo_could_still_bring_back() {
+    let (_guard, store) = store();
+    let project = project_with_inline_cutout(&store, 2);
+    store.save(&project).expect("save with cutout");
+    assert_eq!(matte_file_count(&store, &project), 3);
+
+    // The cutout clip is deleted and autosaved; the undo history still holds it.
+    let mut without_clip = project.clone();
+    without_clip.scenes[0].tracks.main.elements_mut().clear();
+    store.save(&without_clip).expect("autosave");
+
+    assert_eq!(
+        matte_file_count(&store, &project),
+        3,
+        "an undo after the autosave must find its mattes"
+    );
+}
+
+#[test]
+fn sweeping_mattes_drops_orphans_but_keeps_what_the_document_uses() {
+    let (_guard, store) = store();
+    let project = project_with_inline_cutout(&store, 2);
+    store.save(&project).expect("save");
+    let stray = store
+        .matte_directory(&project.metadata.id)
+        .join("stray.png");
+    fs::write(&stray, b"orphan").expect("stray matte");
+
+    // The caller's copy still holds the mattes inline; the files it maps to stay.
+    let removed = store.sweep_mattes(&project).expect("sweep");
+    assert_eq!(removed, 1);
+    assert!(!stray.exists());
+    assert_eq!(matte_file_count(&store, &project), 3);
+
+    let mut without_clip = project.clone();
+    without_clip.scenes[0].tracks.main.elements_mut().clear();
+    assert_eq!(store.sweep_mattes(&without_clip).expect("sweep"), 3);
+    assert_eq!(matte_file_count(&store, &project), 0);
 }

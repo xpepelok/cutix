@@ -144,8 +144,22 @@ fn split_arrow(line: &str) -> Option<(&str, &str)> {
     Some((&line[..index], &line[index + 3..]))
 }
 
+/// Unifies line endings and empties lines that hold only whitespace.
+///
+/// Cue blocks are split on a blank line, and a separator line carrying stray spaces
+/// or tabs (common in hand-edited files) would otherwise glue two cues into one.
+pub(crate) fn normalize_cue_lines(input: &str) -> String {
+    input
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .split('\n')
+        .map(|line| if line.trim().is_empty() { "" } else { line })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn parse_srt(input: &str) -> ParseSubtitleResult {
-    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = normalize_cue_lines(input);
     let normalized = normalized.trim();
     if normalized.is_empty() {
         return ParseSubtitleResult::default();
@@ -304,6 +318,17 @@ mod tests {
     #[test]
     fn an_empty_file_yields_nothing() {
         assert_eq!(parse_srt("   \n\n  "), ParseSubtitleResult::default());
+    }
+
+    #[test]
+    fn a_separator_line_holding_only_whitespace_still_splits_cues() {
+        let result = parse_srt(
+            "1\n00:00:01,000 --> 00:00:02,000\nFirst\n \t \n2\n00:00:03,000 --> 00:00:04,000\nSecond\n",
+        );
+        assert_eq!(result.skipped_cue_count, 0);
+        assert_eq!(result.captions.len(), 2);
+        assert_eq!(result.captions[0].text, "First");
+        assert_eq!(result.captions[1].text, "Second");
     }
 
     #[test]

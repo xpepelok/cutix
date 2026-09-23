@@ -41,7 +41,7 @@ impl HomeView {
         glyph: &'static str,
         route: Route,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::Stateful<gpui::Div> {
         let colors = self.colors(cx);
         let hover_key = format!("home-{key}");
         let lift = self.transitions.eased(&hover_key);
@@ -155,7 +155,11 @@ impl Render for HomeView {
         let colors = self.colors(cx);
         let cards: Vec<_> = DESTINATIONS
             .iter()
-            .map(|(key, glyph, route)| self.card(key, glyph, *route, cx))
+            .enumerate()
+            .map(|(index, (key, glyph, route))| {
+                let card = self.card(key, glyph, *route, cx);
+                crate::appear::item(card, SharedString::from(format!("appear-{key}")), index + 1)
+            })
             .collect();
 
         div()

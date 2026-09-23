@@ -28,6 +28,50 @@ const FULLSCREEN_QUAD_POSITIONS: [[f32; 2]; 6] = [
     [1.0, 1.0],
 ];
 
+/// Row layout of a texture-to-buffer copy. wgpu requires `bytes_per_row` of such
+/// copies to be a multiple of `COPY_BYTES_PER_ROW_ALIGNMENT` (256), so rows are
+/// padded on the GPU side and the padding is stripped again after mapping.
+#[cfg_attr(not(all(feature = "wasm", target_arch = "wasm32")), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReadbackLayout {
+    unpadded_bytes_per_row: u32,
+    padded_bytes_per_row: u32,
+    height: u32,
+}
+
+#[cfg_attr(not(all(feature = "wasm", target_arch = "wasm32")), allow(dead_code))]
+impl ReadbackLayout {
+    const BYTES_PER_PIXEL: u32 = 4;
+
+    fn new(width: u32, height: u32) -> Self {
+        let unpadded_bytes_per_row = width * Self::BYTES_PER_PIXEL;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(align) * align;
+        Self {
+            unpadded_bytes_per_row,
+            padded_bytes_per_row,
+            height,
+        }
+    }
+
+    /// Computed in u64 so large frames cannot overflow the u32 multiplication.
+    fn buffer_size(&self) -> u64 {
+        u64::from(self.padded_bytes_per_row) * u64::from(self.height)
+    }
+
+    fn strip_padding(&self, padded: &[u8]) -> Vec<u8> {
+        let row = self.unpadded_bytes_per_row as usize;
+        let mut tight = Vec::with_capacity(row * self.height as usize);
+        for chunk in padded
+            .chunks(self.padded_bytes_per_row as usize)
+            .take(self.height as usize)
+        {
+            tight.extend_from_slice(&chunk[..row]);
+        }
+        tight
+    }
+}
+
 pub struct GpuContext {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -347,12 +391,17 @@ impl GpuContext {
         width: u32,
         height: u32,
     ) -> Result<(), GpuError> {
-        let Some(config) = surface.get_default_config(&self.adapter, width, height) else {
+        let Some(mut config) = surface.get_default_config(&self.adapter, width, height) else {
             return Err(GpuError::UnsupportedSurfaceFormat);
         };
-        if config.format != self.texture_format {
+        // The default config just picks the surface's preferred format (formats[0]);
+        // a surface that also lists our texture format is perfectly usable, so only
+        // reject when it cannot present that format at all.
+        let capabilities = surface.get_capabilities(&self.adapter);
+        if !capabilities.formats.contains(&self.texture_format) {
             return Err(GpuError::UnsupportedSurfaceFormat);
         }
+        config.format = self.texture_format;
         surface.configure(&self.device, &config);
         Ok(())
     }
@@ -520,10 +569,10 @@ impl GpuContext {
         width: u32,
         height: u32,
     ) -> Result<(), GpuError> {
-        let buffer_size = (width * height * 4) as u64;
+        let layout = ReadbackLayout::new(width, height);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gpu-readback-buffer"),
-            size: buffer_size,
+            size: layout.buffer_size(),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -544,7 +593,7 @@ impl GpuContext {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(width * 4),
+                    bytes_per_row: Some(layout.padded_bytes_per_row),
                     rows_per_image: Some(height),
                 },
             },
@@ -561,7 +610,7 @@ impl GpuContext {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
 
         let data = slice.get_mapped_range();
-        let mut rgba_bytes = data.to_vec();
+        let mut rgba_bytes = layout.strip_padding(&data);
         drop(data);
         buffer.unmap();
 
@@ -586,5 +635,40 @@ impl GpuContext {
             .map_err(|_| GpuError::AdapterUnavailable)?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod readback_layout_tests {
+    use super::ReadbackLayout;
+
+    #[test]
+    fn readback_rows_are_padded_to_copy_alignment() {
+        let layout = ReadbackLayout::new(100, 3);
+        assert_eq!(layout.unpadded_bytes_per_row, 400);
+        assert_eq!(layout.padded_bytes_per_row, 512);
+        assert_eq!(layout.buffer_size(), 512 * 3);
+    }
+
+    #[test]
+    fn readback_rows_already_aligned_are_not_padded() {
+        let layout = ReadbackLayout::new(64, 2);
+        assert_eq!(layout.padded_bytes_per_row, 256);
+        assert_eq!(layout.buffer_size(), 512);
+    }
+
+    #[test]
+    fn readback_buffer_size_does_not_overflow_u32() {
+        let layout = ReadbackLayout::new(16_384, 16_384);
+        assert_eq!(layout.buffer_size(), 16_384u64 * 4 * 16_384);
+    }
+
+    #[test]
+    fn readback_padding_is_stripped_per_row() {
+        let layout = ReadbackLayout::new(2, 2);
+        let mut padded = vec![0xEEu8; layout.buffer_size() as usize];
+        padded[..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        padded[256..264].copy_from_slice(&[9, 10, 11, 12, 13, 14, 15, 16]);
+        assert_eq!(layout.strip_padding(&padded), (1..=16).collect::<Vec<u8>>());
     }
 }

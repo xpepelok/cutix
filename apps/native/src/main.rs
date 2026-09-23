@@ -6,6 +6,7 @@ use gpui::{
 };
 
 mod ai;
+mod appear;
 mod assets;
 mod audio_fx;
 mod calendar;
@@ -50,6 +51,7 @@ mod text_anim;
 mod theme;
 mod titlebar;
 mod tracking;
+mod update;
 mod youtube_ui;
 
 use assets::Icons;
@@ -139,6 +141,7 @@ fn adopt_previous_data() {
 
 fn main() {
     adopt_previous_data();
+    update::clean_up();
     cutix_i18n::bootstrap();
     let settings = state::load_settings();
     if let Some(code) = detected_locale(settings.locale.clone()) {
@@ -176,13 +179,18 @@ fn main() {
         _ => {}
     }
 
-    let _ = fileassoc::register_folder_verb(&shell_label("library.openHere"));
-
-    let _ = fileassoc::register(&[fileassoc::Group::Video]);
-    let _ = fileassoc::register_file_verbs([
-        &shell_label("library.editHere"),
-        &shell_label("library.publishHere"),
-    ]);
+    // Registration points Explorer at whichever executable ran last. A development
+    // build or a throwaway test copy must not steal the entries from the installed one.
+    let registers =
+        !cfg!(debug_assertions) && std::env::var_os("CUTIX_NO_SHELL_REGISTRATION").is_none();
+    if registers {
+        let _ = fileassoc::register_folder_verb(&shell_label("library.openHere"));
+        let _ = fileassoc::register(&[fileassoc::Group::Video]);
+        let _ = fileassoc::register_file_verbs([
+            &shell_label("library.editHere"),
+            &shell_label("library.publishHere"),
+        ]);
+    }
 
     let browse = match &launch {
         launch::Launch::BrowseFolder(path) => Some(path.clone()),

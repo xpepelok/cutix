@@ -278,6 +278,56 @@ fn cancelling_stops_the_render_and_reports_it() {
 }
 
 #[test]
+fn an_export_with_a_missing_media_file_is_refused_and_leaves_no_output_behind() {
+    let _ = ffmpeg_ready();
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("holes.mp4");
+    // The project uses "gradient", and no resolver knows where that file is.
+    let job = request(destination.clone(), 320, 240, project(320, 240, 2.0));
+    let cancel = AtomicBool::new(false);
+    let error = run(&job, &MediaMap::new(), &cancel, &mut |_| {})
+        .expect_err("a clip without a file must not export");
+    assert!(
+        matches!(&error, ExportError::Compose(detail) if detail.contains("gradient")),
+        "{error}"
+    );
+    assert!(
+        !destination.exists(),
+        "no output may be written for a broken export"
+    );
+}
+
+/// A file with a PNG name that no decoder accepts.
+fn bogus_png(directory: &std::path::Path) -> PathBuf {
+    let path = directory.join("bogus.png");
+    std::fs::write(&path, b"this is not a png").expect("write bogus png");
+    path
+}
+
+#[test]
+fn a_file_that_cannot_be_decoded_fails_the_export_and_removes_the_partial_output() {
+    let _ = ffmpeg_ready();
+    if FrameComposer::new().is_err() {
+        eprintln!("no gpu adapter; skipping");
+        return;
+    }
+    let directory = tempfile::tempdir().expect("tempdir");
+    let destination = directory.path().join("undecodable.mp4");
+    // The file exists, so the pre-flight passes and the failure surfaces mid-render,
+    // after the backend has already opened the destination.
+    let media = MediaMap::new().with("gradient", bogus_png(directory.path()));
+    let job = request(destination.clone(), 320, 240, project(320, 240, 2.0));
+    let cancel = AtomicBool::new(false);
+    let error =
+        run(&job, &media, &cancel, &mut |_| {}).expect_err("an undecodable clip must not export");
+    assert!(matches!(error, ExportError::Compose(_)), "{error}");
+    assert!(
+        !destination.exists(),
+        "the partial output must be removed so it cannot pass for a finished export"
+    );
+}
+
+#[test]
 fn an_empty_project_is_refused_instead_of_producing_a_zero_frame_file() {
     let _ = ffmpeg_ready();
     let directory = tempfile::tempdir().expect("tempdir");
@@ -1091,5 +1141,155 @@ fn a_trim_inside_an_aac_packet_does_not_copy_audio_from_before_the_cut() {
         decoded.seconds() <= 1.0 + 2.0 * packet_seconds,
         "the trimmed audio is {:.6}s long, past the one second asked for",
         decoded.seconds()
+    );
+}
+
+/// The length of each track in an MP4, in seconds, from the durations of its samples.
+fn track_seconds(path: &std::path::Path) -> Vec<(mp4::TrackType, f64)> {
+    let file = std::fs::File::open(path).expect("open the trimmed file");
+    let size = file.metadata().expect("file metadata").len();
+    let mut reader =
+        mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).expect("read the mp4");
+    let tracks: Vec<(u32, u32, u32, mp4::TrackType)> = reader
+        .tracks()
+        .iter()
+        .filter_map(|(id, track)| {
+            Some((
+                *id,
+                track.timescale().max(1),
+                track.sample_count(),
+                track.track_type().ok()?,
+            ))
+        })
+        .collect();
+    let mut lengths = Vec::new();
+    for (id, timescale, count, kind) in tracks {
+        let Ok(Some(last)) = reader.read_sample(id, count) else {
+            continue;
+        };
+        let end = last.start_time + u64::from(last.duration);
+        lengths.push((kind, end as f64 / f64::from(timescale)));
+    }
+    lengths
+}
+
+#[test]
+fn a_trim_snapped_back_to_a_keyframe_keeps_audio_running_to_the_requested_end() {
+    if !ffmpeg_ready() {
+        eprintln!("SKIPPED: no FFmpeg encoder, so no AAC source to trim");
+        return;
+    }
+    if FrameComposer::new().is_err() {
+        eprintln!("no gpu adapter; skipping");
+        return;
+    }
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = rendered_source_with_audio(directory.path());
+    let destination = directory.path().join("snapped-with-audio.mp4");
+
+    // 0.5 s is between keyframes, so the copy starts earlier than asked. Both tracks must
+    // still end at 1.5 s of the source; audio used to stop at origin + 1 s instead.
+    cutix_export::remux::trim(&source, seconds(0.5), seconds(1.0), true, &destination)
+        .expect("the trim ran");
+    let lengths = track_seconds(&destination);
+    let length = |wanted: mp4::TrackType| {
+        lengths
+            .iter()
+            .find(|(kind, _)| *kind == wanted)
+            .map(|(_, seconds)| *seconds)
+            .expect("the track is present")
+    };
+    let video = length(mp4::TrackType::Video);
+    let audio = length(mp4::TrackType::Audio);
+    assert!(video > 1.0, "the snapped cut should be longer than asked");
+    assert!(
+        (video - audio).abs() < 0.05,
+        "video runs {video:.3}s but audio {audio:.3}s"
+    );
+}
+
+/// The start of every keyframe on the video track, in seconds, and the frame length.
+fn keyframe_times(path: &std::path::Path) -> (Vec<f64>, f64) {
+    let file = std::fs::File::open(path).expect("open the source");
+    let size = file.metadata().expect("file metadata").len();
+    let mut reader =
+        mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).expect("read the mp4");
+    let (id, timescale, count) = reader
+        .tracks()
+        .iter()
+        .find(|(_, track)| track.track_type().ok() == Some(mp4::TrackType::Video))
+        .map(|(id, track)| {
+            (
+                *id,
+                f64::from(track.timescale().max(1)),
+                track.sample_count(),
+            )
+        })
+        .expect("a video track");
+    let mut keyframes = Vec::new();
+    let mut frame = 0.0;
+    for index in 1..=count {
+        let Ok(Some(sample)) = reader.read_sample(id, index) else {
+            continue;
+        };
+        if index == 1 {
+            frame = f64::from(sample.duration) / timescale;
+        }
+        if sample.is_sync {
+            keyframes.push(sample.start_time as f64 / timescale);
+        }
+    }
+    (keyframes, frame)
+}
+
+/// Stream-copies one second of `source` from `start` without snapping to a keyframe,
+/// returning how many frames were copied.
+fn copy_one_second_unsnapped(source: &std::path::Path, start: f64, name: &str) -> u64 {
+    let destination = source.with_file_name(name);
+    let plan = cutix_export::remux::TrimPlan {
+        source: source.to_path_buf(),
+        start: seconds(start),
+        duration: seconds(1.0),
+        include_audio: false,
+        snap_to_keyframe: false,
+    };
+    cutix_export::remux::run(&plan, &destination, &AtomicBool::new(false), &mut |_| {})
+        .unwrap_or_else(|error| panic!("the cut at {start:.4}s was not copied: {error}"))
+        .frames
+}
+
+#[test]
+fn a_cut_within_half_a_frame_of_a_keyframe_stream_copies_exactly_one_second() {
+    if FrameComposer::new().is_err() {
+        eprintln!("no gpu adapter; skipping");
+        return;
+    }
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = rendered_source(directory.path());
+
+    let (keyframes, frame) = keyframe_times(&source);
+    assert!(frame > 0.0, "the source frames carry a duration");
+    // A keyframe with a second and a couple of frames of material after it, so both the
+    // start and the end of the cut fall inside the 3 s source and the end rule applies.
+    let keyframe = keyframes
+        .iter()
+        .copied()
+        .rfind(|start| *start > frame && *start + 1.0 + 2.0 * frame <= 3.0)
+        .expect("a keyframe with a second after it");
+    let one_second = (1.0 / frame).round() as u64;
+
+    // 0.4 frames after the keyframe: the keyframe is the nearest frame, and the cut ends
+    // 0.4 frames into a frame, which is dropped. Taking the last frame before the end
+    // instead would copy one frame more.
+    assert_eq!(
+        copy_one_second_unsnapped(&source, keyframe + 0.4 * frame, "after-keyframe.mp4"),
+        one_second
+    );
+    // 0.4 frames before the keyframe: the floor is not a keyframe, so a floor start could
+    // not be stream-copied without snapping; the nearest frame is the keyframe. The cut
+    // ends 0.6 frames into a frame, which is kept.
+    assert_eq!(
+        copy_one_second_unsnapped(&source, keyframe - 0.4 * frame, "before-keyframe.mp4"),
+        one_second
     );
 }

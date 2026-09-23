@@ -102,6 +102,9 @@ pub fn dialog(
         .items_center()
         .justify_center()
         .bg(opacity(gpui::black(), BACKDROP_OPACITY))
+        // Opaque to the pointer: the wheel over the dialog must not also scroll the
+        // timeline underneath it.
+        .occlude()
         .child(
             div()
                 .w(px(DIALOG_WIDTH_PX))

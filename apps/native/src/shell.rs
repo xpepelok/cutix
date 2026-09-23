@@ -41,6 +41,15 @@ pub const PREVIEW_MIN_WIDTH_PX: f32 = 320.0;
 const MIN_ROW: f32 = 0.30;
 const MAX_ROW: f32 = 0.85;
 
+/// The widest one column of a pair may grow to while leaving the other its minimum.
+///
+/// Float rounding across many drags can shrink a pair's total to a hair under two
+/// minimums, and `f32::clamp` panics when its bounds cross, so the ceiling never drops
+/// below the floor.
+fn column_ceiling(total: f32) -> f32 {
+    (total - MIN_COLUMN).max(MIN_COLUMN)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Split {
     Tools,
@@ -68,14 +77,14 @@ impl Default for Layout {
 impl Layout {
     pub fn drag_tools(&mut self, fraction: f32) {
         let total = self.tools + self.preview;
-        let tools = fraction.clamp(MIN_COLUMN, total - MIN_COLUMN);
+        let tools = fraction.clamp(MIN_COLUMN, column_ceiling(total));
         self.preview = total - tools;
         self.tools = tools;
     }
 
     pub fn drag_properties(&mut self, fraction: f32) {
         let total = self.preview + self.properties;
-        let preview = (fraction - self.tools).clamp(MIN_COLUMN, total - MIN_COLUMN);
+        let preview = (fraction - self.tools).clamp(MIN_COLUMN, column_ceiling(total));
         self.properties = total - preview;
         self.preview = preview;
     }
@@ -444,6 +453,15 @@ impl Shell {
     }
 
     fn cancel_interaction(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The export dialog covers the editor, so Escape closes it first, as it
+        // closes every other dialog; a running export carries on in the background.
+        if self.app.read(cx).export.open {
+            self.app
+                .update(cx, |model, cx| model.close_export_dialog(cx));
+            window.focus(&self.focus);
+            cx.notify();
+            return;
+        }
         self.language_menu.dismiss();
         self.tooltips.dismiss();
         self.name_edit = None;
@@ -614,7 +632,7 @@ impl Shell {
                 window,
             )
             .on_key_down(cx.listener(
-                |this: &mut Self, event: &KeyDownEvent, _, cx| {
+                |this: &mut Self, event: &KeyDownEvent, window: &mut Window, cx| {
                     let Some(field) = this.name_edit.as_mut() else {
                         return;
                     };
@@ -622,6 +640,10 @@ impl Shell {
                         TextEvent::Submit => {
                             let name = field.text().trim().to_string();
                             this.name_edit = None;
+                            // The dropped field's focus handle would otherwise stay the
+                            // window's focus and keep the shell in typing mode, with
+                            // editor shortcuts blocked until the user clicks elsewhere.
+                            window.focus(&this.focus);
                             let id = this
                                 .app
                                 .read(cx)
@@ -633,7 +655,10 @@ impl Shell {
                                     .update(cx, |model, cx| model.rename_project(&id, name, cx));
                             }
                         }
-                        TextEvent::Cancel => this.name_edit = None,
+                        TextEvent::Cancel => {
+                            this.name_edit = None;
+                            window.focus(&this.focus);
+                        }
                         _ => {}
                     }
                     cx.notify();
@@ -998,12 +1023,15 @@ impl Render for Shell {
         let content = if self.publish_only {
             div().size_full().into_any_element()
         } else {
-            match route {
-                Route::Home => self.home.clone().into_any_element(),
-                Route::Projects => self.projects.clone().into_any_element(),
-                Route::Library => self.library.clone().into_any_element(),
-                Route::Editor => self.editor(window, cx).into_any_element(),
-            }
+            let (page, id) = match route {
+                Route::Home => (self.home.clone().into_any_element(), "page-home"),
+                Route::Projects => (self.projects.clone().into_any_element(), "page-projects"),
+                Route::Library => (self.library.clone().into_any_element(), "page-library"),
+                Route::Editor => (self.editor(window, cx).into_any_element(), "page-editor"),
+            };
+            // Each route settles in under its own id, so switching screens replays
+            // the entrance while staying on one never does.
+            crate::appear::page(div().size_full().child(page), id).into_any_element()
         };
 
         let youtube = self
@@ -1031,13 +1059,18 @@ impl Render for Shell {
         let export_view = (route == Route::Editor && !self.publish_only)
             .then(|| crate::export::snapshot(self.app.read(cx)))
             .flatten();
-        let export = export_view.map(|view| crate::export::export_dialog(view, cx));
+        let export = export_view.map(|view| {
+            crate::appear::modal(crate::export::export_dialog(view, cx), "export-dialog")
+        });
         if self.app.read(cx).export.is_running() {
             window.request_animation_frame();
         }
         let shortcuts = self.shortcuts.open.then(|| {
             let bindings = self.app.read(cx).keybindings.clone();
-            crate::shortcuts::dialog(colors, &bindings, &self.shortcuts, cx)
+            crate::appear::modal(
+                crate::shortcuts::dialog(colors, &bindings, &self.shortcuts, cx),
+                "shortcuts-dialog",
+            )
         });
 
         div()
@@ -1049,18 +1082,23 @@ impl Render for Shell {
                         return;
                     }
                     if event.keystroke.key == "escape" {
-                        this.cancel_interaction(window, cx);
-                        return;
-                    }
-
-                    if event.keystroke.key == "escape" {
+                        // The topmost thing closes first: a YouTube or settings window
+                        // sits above everything the editor could be in the middle of.
                         let closed = this
                             .assets
                             .update(cx, |panel, _| panel.dismiss_youtube_overlays());
                         if closed {
                             cx.notify();
-                            return;
+                        } else if crate::input::is_typing(window, cx) {
+                            // Escape in a field only leaves the field; the clip it is
+                            // editing stays selected so the properties stay on screen.
+                            this.name_edit = None;
+                            window.focus(&this.focus);
+                            cx.notify();
+                        } else {
+                            this.cancel_interaction(window, cx);
                         }
+                        return;
                     }
                     if this.app.read(cx).route == Route::Library && this.name_edit.is_none() {
                         let step = match event.keystroke.key.as_str() {
@@ -1091,7 +1129,7 @@ impl Render for Shell {
                     };
 
                     let typing = crate::input::is_typing(window, cx);
-                    if !chord.control && !chord.alt && typing {
+                    if typing && chord.belongs_to_text_field() {
                         return;
                     }
                     this.run_chord(&chord, window, cx);
@@ -1132,6 +1170,26 @@ mod tests {
         layout.drag_tools(0.45);
         assert!((layout.tools - 0.45).abs() < 1e-6);
         assert!((layout.tools + layout.preview - total).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dragging_both_splits_to_the_edges_back_and_forth_never_panics() {
+        let mut layout = Layout::default();
+        for _ in 0..200 {
+            layout.drag_tools(0.0);
+            layout.drag_properties(0.0);
+            layout.drag_tools(1.0);
+            layout.drag_properties(1.0);
+        }
+        let mut squeezed = Layout {
+            tools: 0.15,
+            preview: 0.149_999_95,
+            properties: 0.7,
+            main_content: 0.5,
+        };
+        squeezed.drag_tools(0.9);
+        squeezed.drag_properties(0.9);
+        assert!(squeezed.tools >= MIN_COLUMN && squeezed.preview >= MIN_COLUMN - 1e-6);
     }
 
     #[test]

@@ -61,9 +61,8 @@ impl Entry {
         }
         let name = path
             .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_string();
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
 
         Some(Self {
             name,
@@ -233,6 +232,24 @@ pub fn folder_of(entry: &Entry, root: &Path) -> String {
             .unwrap_or_default()
             .to_string(),
     }
+}
+
+/// Pulls the members of each group together while keeping the chosen order.
+///
+/// Groups come in the order their first member appears and entries keep their
+/// relative order inside a group, so sorting by size still reads biggest-first within
+/// every folder.
+pub fn gather_groups(entries: &mut [Entry], label: impl Fn(&Entry) -> String) {
+    let mut first_seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut ranks = Vec::with_capacity(entries.len());
+    for entry in entries.iter() {
+        let next = first_seen.len();
+        ranks.push(*first_seen.entry(label(entry)).or_insert(next));
+    }
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by_key(|&index| ranks[index]);
+    let arranged: Vec<Entry> = order.iter().map(|&index| entries[index].clone()).collect();
+    entries.clone_from_slice(&arranged);
 }
 
 pub fn arrange(entries: &mut [Entry], key: SortKey, ascending: bool) {
@@ -533,6 +550,19 @@ mod tests {
             width: None,
             height: None,
         }
+    }
+
+    #[test]
+    fn gathering_groups_puts_each_folder_together_and_keeps_the_sort_inside() {
+        let mut entries: Vec<Entry> = ["a/1", "b/2", "a/3", "c/4", "b/5"]
+            .iter()
+            .map(|name| sample(name))
+            .collect();
+        gather_groups(&mut entries, |entry| {
+            entry.name.split('/').next().unwrap_or_default().to_string()
+        });
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, ["a/1", "a/3", "b/2", "b/5", "c/4"]);
     }
 
     #[test]

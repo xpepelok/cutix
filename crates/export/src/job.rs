@@ -1,15 +1,19 @@
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use cutix_playback::{AudioCache, ComposeRequest, FrameComposer, MediaResolver, MixRequest, mix};
+use cutix_playback::{
+    AudioCache, ComposeRequest, FrameComposer, MediaResolver, MixRequest, PlaybackError,
+    missing_media, mix,
+};
 use cutix_project::Project;
 use time::{FrameRate, MediaTime};
 
 use crate::backend::{
-    AudioSpec, AudioSupport, BackendFactory, ExportArtifacts, STREAM_COPY, VideoSpec,
+    AudioSpec, AudioSupport, BackendFactory, EncoderBackend, ExportArtifacts, STREAM_COPY,
+    VideoSpec,
 };
 use crate::error::{ExportError, Result};
 use crate::fit::{blit_centre, plan_fit};
@@ -145,6 +149,20 @@ pub fn run(
         return Err(ExportError::Empty);
     }
 
+    // The preview drops a layer whose file is gone; an export must not, or the person
+    // ends up with a finished-looking video full of holes (and, in YouTube mode, with
+    // it published). Refusing here, before any output exists, also means a clip near
+    // the end does not cost minutes of rendering first. The composer below stays
+    // strict as well, for a file that disappears mid-render.
+    if let Some(id) = missing_media(&request.project, request.scene_id.as_deref(), media)
+        .into_iter()
+        .next()
+    {
+        return Err(ExportError::Compose(
+            PlaybackError::MediaNotFound(id).to_string(),
+        ));
+    }
+
     if let Some(plan) = crate::remux::plan(request, media) {
         let started = Instant::now();
         match crate::remux::run(&plan, &request.destination, cancel, on_progress) {
@@ -188,10 +206,48 @@ pub fn run(
     let mut composer =
         FrameComposer::new().map_err(|error| ExportError::Compose(error.to_string()))?;
     composer.set_matte_root(request.matte_root.clone());
+    composer.set_strict_media(true);
 
-    let mut backend = request
+    let backend = request
         .backend
         .create(&request.destination, video, audio_spec)?;
+
+    let outcome = encode(
+        request,
+        media,
+        cancel,
+        on_progress,
+        &mut composer,
+        backend,
+        &plan,
+        duration,
+        total_frames,
+    );
+    if outcome.is_err() {
+        // `encode` has dropped the backend by now, so the file is closed. Whatever it
+        // wrote is a headerless fragment that no player opens, and leaving it at the
+        // destination would look like a finished export.
+        discard_partial_output(&request.destination);
+    }
+    outcome
+}
+
+/// Renders every frame, mixes the audio and finalises the container.
+///
+/// Owns the backend so that on any failure it is dropped (and its file closed) before
+/// the caller removes the partial output.
+#[allow(clippy::too_many_arguments)]
+fn encode(
+    request: &ExportRequest,
+    media: &dyn MediaResolver,
+    cancel: &AtomicBool,
+    on_progress: &mut dyn FnMut(Progress),
+    composer: &mut FrameComposer,
+    mut backend: Box<dyn EncoderBackend>,
+    plan: &crate::fit::FitPlan,
+    duration: MediaTime,
+    total_frames: u64,
+) -> Result<ExportOutcome> {
     let audio_support = backend.audio_support();
 
     let mut canvas_pixels = vec![0u8; request.width as usize * request.height as usize * 4];
@@ -320,6 +376,13 @@ pub fn run(
         encoder: request.backend.name().to_owned(),
         skipped,
     })
+}
+
+/// Best effort: the destination may never have been created, or the backend may have
+/// already removed it, and neither is worth turning into a second error on top of the
+/// one being reported.
+fn discard_partial_output(destination: &Path) {
+    let _ = std::fs::remove_file(destination);
 }
 
 #[cfg(test)]

@@ -139,6 +139,34 @@ impl Accounts {
         }
     }
 
+    /// Folds a finished re-authorisation into the row it was for.
+    ///
+    /// The page can time out before the channel's name, handle or avatar render, and a
+    /// blank there means "not seen", not "gone", so what the row already knew is kept.
+    /// Returns `false`, changing nothing, when the row was removed while the browser
+    /// was open: bringing it back would resurrect an account the person just removed.
+    pub fn reauthorised(&mut self, fresh: Account, now: i64) -> bool {
+        let Some(existing) = self
+            .accounts
+            .iter_mut()
+            .find(|existing| existing.id == fresh.id)
+        else {
+            return false;
+        };
+        if !fresh.title.trim().is_empty() {
+            existing.title = fresh.title;
+        }
+        if !fresh.handle.trim().is_empty() {
+            existing.handle = fresh.handle;
+        }
+        if !fresh.avatar_url.trim().is_empty() {
+            existing.avatar_url = fresh.avatar_url;
+        }
+        existing.needs_reauth = false;
+        existing.refreshed_at = now;
+        true
+    }
+
     pub fn mark_needs_reauth(&mut self, id: &str) {
         if let Some(account) = self.accounts.iter_mut().find(|account| account.id == id) {
             account.needs_reauth = true;
@@ -263,6 +291,46 @@ mod tests {
         assert!(accounts.get("chan-2").expect("account").needs_reauth);
         assert!(!accounts.get("chan-1").expect("account").needs_reauth);
         assert_eq!(accounts.accounts.len(), 2);
+    }
+
+    #[test]
+    fn signing_back_in_keeps_what_the_row_knew_when_the_page_showed_nothing_new() {
+        let mut accounts = accounts();
+        accounts.mark_needs_reauth("chan-1");
+
+        let bare = Account {
+            id: "chan-1".to_string(),
+            ..Default::default()
+        };
+        assert!(accounts.reauthorised(bare, 5_000));
+
+        let account = accounts.get("chan-1").expect("account");
+        assert_eq!(account.title, "First Channel", "a blank is not a rename");
+        assert_eq!(account.handle, "@First Channel");
+        assert_eq!(account.avatar_url, "https://yt3.example/chan-1.jpg");
+        assert!(!account.needs_reauth, "the session works again");
+        assert_eq!(account.refreshed_at, 5_000);
+        assert_eq!(account.added_at, 100, "it is the same account as before");
+
+        let renamed = Account {
+            id: "chan-1".to_string(),
+            title: "Renamed".to_string(),
+            ..Default::default()
+        };
+        accounts.reauthorised(renamed, 6_000);
+        assert_eq!(
+            accounts.get("chan-1").map(|a| a.title.as_str()),
+            Some("Renamed")
+        );
+    }
+
+    #[test]
+    fn a_sign_in_that_finishes_after_its_account_was_removed_does_not_bring_it_back() {
+        let mut accounts = accounts();
+        accounts.remove("chan-2");
+        assert!(!accounts.reauthorised(account("chan-2", "Second Channel"), 5_000));
+        assert!(accounts.get("chan-2").is_none());
+        assert_eq!(accounts.accounts.len(), 1);
     }
 
     #[test]

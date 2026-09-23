@@ -38,6 +38,13 @@ struct AudioDecoder {
     stream_index: c_int,
     sample_rate: u32,
     channels: usize,
+    /// Seconds per unit of the stream's timestamps.
+    time_base: f64,
+    /// The instant this decoder calls zero, in seconds on the container's clock: the
+    /// file's media origin, shared with the video demuxer so the two stay in sync.
+    /// Transport streams start well away from zero; everything reported is measured from
+    /// here and seeks add it back.
+    start_offset: f64,
 }
 
 impl Drop for AudioDecoder {
@@ -96,6 +103,8 @@ impl AudioDecoder {
             stream_index: -1,
             sample_rate: 0,
             channels: 0,
+            time_base: 0.0,
+            start_offset: 0.0,
         };
 
         if unsafe { (api.avformat_find_stream_info)(decoder.format, null_mut()) } < 0 {
@@ -127,6 +136,8 @@ impl AudioDecoder {
             return Err(backend_error("audio stream has no parameters"));
         }
 
+        decoder.time_base = unsafe { (*stream).time_base }.as_f64();
+        decoder.start_offset = unsafe { super::video::media_origin(api, decoder.format) };
         decoder.sample_rate = unsafe { (*codecpar).sample_rate }.max(0) as u32;
         decoder.channels = unsafe { (*codecpar).ch_layout.nb_channels }.max(0) as usize;
         if decoder.sample_rate == 0 || decoder.channels == 0 {
@@ -168,7 +179,9 @@ impl AudioDecoder {
     }
 
     fn seek(&mut self, seconds: f64) -> Result<(), DecodeError> {
-        let target = (seconds.max(0.0) * super::video::AV_TIME_BASE) as i64;
+        // Seeking by format position rather than a stream, so the target is on the
+        // container clock, which starts where the stream does rather than at zero.
+        let target = ((seconds.max(0.0) + self.start_offset) * super::video::AV_TIME_BASE) as i64;
         let sought = unsafe {
             (self.api.avformat_seek_file)(
                 self.format,
@@ -188,14 +201,40 @@ impl AudioDecoder {
         Ok(())
     }
 
+    /// The whole track, placed so its first sample sits at time zero of the media origin.
+    ///
+    /// The buffer is played from zero, so audio that starts after the origin (behind the
+    /// video in a transport stream) is preceded by that much silence, and audio stamped
+    /// before it loses the lead. Without this the whole-file path hears its first sample
+    /// at zero while the picture shows it at its real time.
     fn drain(&mut self) -> Result<AudioBuffer, DecodeError> {
-        self.drain_frames(usize::MAX)
+        let (mut buffer, first) = self.drain_frames(usize::MAX, None)?;
+        align_to_origin(&mut buffer.samples, first, buffer.sample_rate);
+        Ok(buffer)
     }
 
-    fn drain_frames(&mut self, limit: usize) -> Result<AudioBuffer, DecodeError> {
+    /// The decoded frame's start in seconds from the media origin, when it carries one.
+    fn frame_timestamp(&self) -> Option<f64> {
+        let (pts, dts) = unsafe { ((*self.frame).pts, (*self.frame).pkt_dts) };
+        stamp_seconds(pts, dts, self.time_base, self.start_offset)
+    }
+
+    /// Decodes up to `limit` sample frames per channel.
+    ///
+    /// With `trim_before`, samples ahead of that time are dropped, and the returned time is
+    /// where the buffer really starts. A backward seek lands on a packet before the target,
+    /// so without the trim the buffer would begin early while being labelled as the target,
+    /// playing the audio late against the picture by up to a packet or more.
+    fn drain_frames(
+        &mut self,
+        limit: usize,
+        trim_before: Option<f64>,
+    ) -> Result<(AudioBuffer, Option<f64>), DecodeError> {
         let mut planes: Vec<Vec<f32>> = vec![Vec::new(); self.channels];
         let mut scratch: Vec<Vec<f32>> = vec![Vec::new(); self.channels];
         let mut finished = false;
+        let mut first_timestamp: Option<Option<f64>> = None;
+        let mut pending_skip = 0usize;
 
         loop {
             if planes.first().is_some_and(|plane| plane.len() >= limit) {
@@ -204,10 +243,25 @@ impl AudioDecoder {
             let received = unsafe { (self.api.avcodec_receive_frame)(self.codec, self.frame) };
             if received == 0 {
                 let count = unsafe { (*self.frame).nb_samples }.max(0) as usize;
+                if first_timestamp.is_none() && count > 0 {
+                    let stamp = self.frame_timestamp();
+                    first_timestamp = Some(stamp);
+                    if let (Some(stamp), Some(start)) = (stamp, trim_before) {
+                        let lead = (start - stamp) * f64::from(self.sample_rate);
+                        pending_skip = lead.round().max(0.0) as usize;
+                    }
+                }
                 if count > 0 {
                     self.convert(count, &mut scratch, &mut planes)?;
                 }
                 unsafe { (self.api.av_frame_unref)(self.frame) };
+                if pending_skip > 0 {
+                    let dropped = pending_skip.min(planes.first().map_or(0, Vec::len));
+                    for plane in &mut planes {
+                        plane.drain(..dropped.min(plane.len()));
+                    }
+                    pending_skip -= dropped;
+                }
                 continue;
             }
             if received == sys::AVERROR_EOF {
@@ -236,14 +290,39 @@ impl AudioDecoder {
         }
 
         if planes.iter().all(Vec::is_empty) {
+            // Audio was decoded but all of it lay before the window: the window starts past
+            // the end of the track (audio that stops before the video does). That is
+            // silence, not a missing decoder, and callers that read an error as the latter
+            // would mute the file for good.
+            if first_timestamp.is_some()
+                && let Some(start) = trim_before
+            {
+                return Ok((
+                    AudioBuffer {
+                        sample_rate: self.sample_rate,
+                        channels: self.channels,
+                        samples: silent_window(self.channels, limit),
+                    },
+                    Some(start),
+                ));
+            }
             return Err(DecodeError::NoFrame);
         }
 
-        Ok(AudioBuffer {
-            sample_rate: self.sample_rate,
-            channels: self.channels,
-            samples: planes,
-        })
+        let starts_at = match (first_timestamp.flatten(), trim_before) {
+            // Anything before the requested start was dropped above, so the buffer starts
+            // at the request unless the stream itself only begins later.
+            (Some(stamp), Some(start)) => Some(stamp.max(start)),
+            (stamp, _) => stamp,
+        };
+        Ok((
+            AudioBuffer {
+                sample_rate: self.sample_rate,
+                channels: self.channels,
+                samples: planes,
+            },
+            starts_at,
+        ))
     }
 
     fn prepare_resampler(&mut self) -> Result<(), DecodeError> {
@@ -326,6 +405,41 @@ impl AudioDecoder {
     }
 }
 
+/// A frame's start in seconds from `origin`, from its presentation timestamp or, lacking
+/// one, its decode timestamp. `None` when it has neither or the time base is unusable.
+pub(crate) fn stamp_seconds(pts: i64, dts: i64, time_base: f64, origin: f64) -> Option<f64> {
+    let stamp = [pts, dts]
+        .into_iter()
+        .find(|value| *value != sys::AV_NOPTS_VALUE)?;
+    (time_base > 0.0).then_some(stamp as f64 * time_base - origin)
+}
+
+/// Beyond this a first timestamp is taken to be broken rather than a real offset: padding
+/// by it would allocate minutes of silence for nothing.
+const MAX_ALIGNMENT_SECONDS: f64 = 60.0;
+
+/// Moves a whole-track buffer whose first sample is at `first` seconds so that it starts
+/// at zero: silence is prepended for a positive `first`, samples dropped for a negative.
+fn align_to_origin(planes: &mut [Vec<f32>], first: Option<f64>, sample_rate: u32) {
+    let Some(first) = first.filter(|first| first.abs() <= MAX_ALIGNMENT_SECONDS) else {
+        return;
+    };
+    let offset = (first.abs() * f64::from(sample_rate)).round() as usize;
+    for plane in planes.iter_mut() {
+        if first > 0.0 {
+            plane.splice(0..0, std::iter::repeat_n(0.0, offset));
+        } else {
+            plane.drain(..offset.min(plane.len()));
+        }
+    }
+}
+
+/// `limit` sample frames of silence per channel: a window that lies wholly past the end of
+/// the track.
+fn silent_window(channels: usize, limit: usize) -> Vec<Vec<f32>> {
+    vec![vec![0.0; limit]; channels]
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct AudioInfo {
     pub sample_rate: u32,
@@ -361,8 +475,9 @@ pub fn decode_audio_range(
     let start = start_seconds.max(0.0);
     decoder.seek(start)?;
     let limit = (seconds.max(0.0) * decoder.sample_rate as f64) as usize;
-    let buffer = decoder.drain_frames(limit.max(1))?;
-    Ok((buffer, start))
+    let (buffer, starts_at) = decoder.drain_frames(limit.max(1), Some(start))?;
+    // A stream without timestamps cannot be trimmed, and is labelled as asked, as before.
+    Ok((buffer, starts_at.unwrap_or(start)))
 }
 
 #[cfg(test)]
@@ -389,6 +504,53 @@ mod tests {
         };
         assert_eq!(buffer.frame_count(), 2_500);
         assert!((buffer.duration_seconds() - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn audio_starting_after_the_origin_is_preceded_by_silence() {
+        // A transport stream whose audio starts 50 ms after the media origin.
+        let mut planes = vec![vec![1.0; 10], vec![1.0; 10]];
+        align_to_origin(&mut planes, Some(0.05), 100);
+        for plane in &planes {
+            assert_eq!(plane.len(), 15);
+            assert!(plane[..5].iter().all(|sample| *sample == 0.0));
+            assert!(plane[5..].iter().all(|sample| *sample == 1.0));
+        }
+    }
+
+    #[test]
+    fn audio_stamped_before_the_origin_loses_its_lead() {
+        let mut planes = vec![(0..10).map(|value| value as f32).collect::<Vec<_>>()];
+        align_to_origin(&mut planes, Some(-0.03), 100);
+        assert_eq!(planes[0], vec![3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn a_missing_or_absurd_first_stamp_leaves_the_buffer_alone() {
+        let mut planes = vec![vec![1.0; 4]];
+        align_to_origin(&mut planes, None, 100);
+        align_to_origin(&mut planes, Some(3_600.0), 100);
+        assert_eq!(planes[0], vec![1.0; 4]);
+    }
+
+    #[test]
+    fn audio_stamps_are_measured_from_the_shared_origin() {
+        let time_base = 1.0 / 90_000.0;
+        let stamp = stamp_seconds(sys::AV_NOPTS_VALUE, 135_000, time_base, 1.4);
+        assert!(stamp.is_some_and(|stamp| (stamp - 0.1).abs() < 1e-9));
+        assert_eq!(
+            stamp_seconds(sys::AV_NOPTS_VALUE, sys::AV_NOPTS_VALUE, time_base, 0.0),
+            None
+        );
+        assert_eq!(stamp_seconds(10, 10, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn a_window_past_the_end_of_the_audio_is_silence_of_the_asked_length() {
+        let silence = silent_window(2, 9_600);
+        assert_eq!(silence.len(), 2);
+        assert!(silence.iter().all(|plane| plane.len() == 9_600));
+        assert!(silence.iter().flatten().all(|sample| *sample == 0.0));
     }
 
     #[test]

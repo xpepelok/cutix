@@ -1494,6 +1494,7 @@ dependencies = [
  "cutix-project",
  "dirs 6.0.0",
  "dsp",
+ "flate2",
  "gpui",
  "image",
  "masks",
@@ -1501,6 +1502,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "smallvec",
  "sounds",
  "speech",
@@ -1515,6 +1517,7 @@ dependencies = [
  "windows 0.61.3",
  "winresource",
  "youtube",
+ "zip",
 ]
 
 [[package]]
@@ -8825,9 +8828,11 @@ name = "youtube"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "libc",
  "serde",
  "serde_json",
  "tungstenite",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

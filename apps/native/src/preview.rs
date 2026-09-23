@@ -78,7 +78,9 @@ pub fn fit_within(frame: cutix_playback::SourceFrame, limit: Option<u32>) -> (u3
     let Some(limit) = limit.filter(|limit| *limit > 0) else {
         return (frame.width, frame.height, frame.rgba);
     };
-    if frame.width <= limit || frame.width == 0 || frame.height == 0 {
+    let expected = frame.width as usize * frame.height as usize * 4;
+    if frame.width <= limit || frame.width == 0 || frame.height == 0 || frame.rgba.len() < expected
+    {
         return (frame.width, frame.height, frame.rgba);
     }
 

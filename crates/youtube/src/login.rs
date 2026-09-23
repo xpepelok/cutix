@@ -116,6 +116,72 @@ pub fn wait_for_channel(connection: &mut Connection, page: &Page) -> Result<Stri
     }
 }
 
+/// The Studio page of one particular channel.
+///
+/// Opening it is how Studio is asked to switch to that channel: a Google account that
+/// manages several (a personal channel and brand channels) lands on its default one at
+/// the bare Studio address. Anything but the characters a channel id is made of is
+/// dropped, so a stored id cannot steer the browser anywhere else.
+pub fn channel_studio_url(account_id: &str) -> String {
+    let safe: String = account_id
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
+        .collect();
+    format!("https://studio.youtube.com/channel/{safe}?hl=en&persist_hl=1")
+}
+
+/// How long Studio gets to move off a channel page this account may not open.
+const CHANNEL_SETTLE: Duration = Duration::from_secs(3);
+
+/// Opens `url` and reports the channel Studio settles on.
+///
+/// Unlike [`wait_for_channel`], the address asked for already names a channel, so seeing
+/// `/channel/` in it proves nothing. The wait is for the page to finish loading, then a
+/// pause for Studio's own redirect away from a channel this Google account cannot
+/// manage; the id is read from wherever it is after that.
+pub fn wait_for_channel_at(
+    connection: &mut Connection,
+    page: &Page,
+    url: &str,
+) -> Result<String, Failure> {
+    page.navigate(connection, url)?;
+    let settled = "(() => location.host === 'studio.youtube.com' && \
+                   document.readyState === 'complete')()";
+    let onboarding = "(() => location.href.includes('/onboarding') || \
+                      location.href.includes('create_channel'))()";
+    let signed_out = "(() => location.host === 'accounts.google.com')()";
+
+    match page.race(
+        connection,
+        &[settled, onboarding, signed_out],
+        STEP_TIMEOUT,
+        "studio",
+    )? {
+        0 => {
+            std::thread::sleep(CHANNEL_SETTLE);
+            let url = page.url(connection)?;
+            if url.contains("/onboarding") || url.contains("create_channel") {
+                return Err(Failure::NoChannel);
+            }
+            if is_google_sign_in(&url) {
+                return Err(Failure::SignedOut);
+            }
+            channel_id_from_url(&url).ok_or(Failure::NoChannel)
+        }
+        1 => Err(Failure::NoChannel),
+        _ => Err(Failure::SignedOut),
+    }
+}
+
+fn is_google_sign_in(url: &str) -> bool {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .is_some_and(|host| host == "accounts.google.com")
+}
+
 pub fn channel_name(connection: &mut Connection, page: &Page) -> String {
     page.eval_string(
         connection,
@@ -311,6 +377,37 @@ mod tests {
             channel_id_from_url("https://studio.youtube.com/channel/short"),
             None
         );
+    }
+
+    #[test]
+    fn a_channel_page_address_names_the_channel_and_nothing_else() {
+        let url = channel_studio_url("UC_x5XG1OV2P6uZZ5FSM9Ttw");
+        assert_eq!(
+            url,
+            "https://studio.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw?hl=en&persist_hl=1"
+        );
+        assert_eq!(
+            channel_id_from_url(&url).as_deref(),
+            Some("UC_x5XG1OV2P6uZZ5FSM9Ttw")
+        );
+        assert_eq!(
+            channel_studio_url("UC/../../evil?x=1#y"),
+            "https://studio.youtube.com/channel/UCevilx1y?hl=en&persist_hl=1",
+            "a stored id cannot add a path, a query or a fragment"
+        );
+    }
+
+    #[test]
+    fn only_googles_own_sign_in_host_counts_as_being_sent_back_to_sign_in() {
+        assert!(is_google_sign_in(
+            "https://accounts.google.com/v3/signin/identifier?continue=x"
+        ));
+        assert!(!is_google_sign_in(
+            "https://studio.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw"
+        ));
+        assert!(!is_google_sign_in(
+            "https://accounts.google.com.evil.example/"
+        ));
     }
 
     #[test]

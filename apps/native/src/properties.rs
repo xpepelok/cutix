@@ -1501,7 +1501,7 @@ impl PropertiesPanel {
         let text = editing.field.text().trim().to_string();
         match editing.target {
             Target::Number { field, scale } => {
-                if let Ok(parsed) = text.parse::<f64>() {
+                if let Some(parsed) = parse_typed_number(&text) {
                     self.commit_number(&editing.element, field, parsed / scale, cx);
                 }
             }
@@ -1598,13 +1598,22 @@ fn inline_editor(
         window,
     )
     .on_key_down(cx.listener(
-        |this: &mut PropertiesPanel, event: &gpui::KeyDownEvent, _, cx| {
+        |this: &mut PropertiesPanel, event: &gpui::KeyDownEvent, window: &mut Window, cx| {
             let Some(editing) = this.editing.as_mut() else {
                 return;
             };
             match editing.field.buffer.key_down(event) {
-                TextEvent::Submit => this.commit_editing(cx),
-                TextEvent::Cancel => this.editing = None,
+                // Dropping the field does not move the window's focus off its
+                // handle, and a focused field keeps the shell in typing mode with
+                // the editing shortcuts blocked. Blur, as the bookmark field does.
+                TextEvent::Submit => {
+                    this.commit_editing(cx);
+                    window.blur();
+                }
+                TextEvent::Cancel => {
+                    this.editing = None;
+                    window.blur();
+                }
                 _ => {}
             }
             cx.notify();
@@ -5877,5 +5886,34 @@ mod tests {
             String::from("Sample"),
             crate::text::patch_for(&crate::text::presets()[0]),
         )
+    }
+}
+
+/// Reads a number typed into a property field.
+///
+/// Accepts a decimal comma, which is what a Russian or German keyboard produces, and
+/// refuses `nan` and `inf`: Rust parses both, but a non-finite value serialises as
+/// `null` and the project would no longer load.
+pub(crate) fn parse_typed_number(text: &str) -> Option<f64> {
+    let text = text.trim().replace(',', ".");
+    let value = text.parse::<f64>().ok()?;
+    value.is_finite().then_some(value)
+}
+
+#[cfg(test)]
+mod typed_number_tests {
+    use super::parse_typed_number;
+
+    #[test]
+    fn a_decimal_comma_reads_like_a_point() {
+        assert_eq!(parse_typed_number("1,5"), Some(1.5));
+        assert_eq!(parse_typed_number(" -2.25 "), Some(-2.25));
+    }
+
+    #[test]
+    fn values_that_cannot_be_saved_are_refused() {
+        for text in ["nan", "NaN", "inf", "-inf", "infinity", "1e999", "", "abc"] {
+            assert_eq!(parse_typed_number(text), None, "{text}");
+        }
     }
 }

@@ -242,6 +242,22 @@ impl ExportSession {
         }
     }
 
+    /// Drops what belonged to the project that was open.
+    ///
+    /// A destination chosen for one project must not carry into the next: exporting
+    /// the next project would otherwise overwrite the file just made for the last
+    /// one. Only a running export keeps its status, it still has to report how it
+    /// ended; the destination goes even then, since the run already resolved its
+    /// own path and the finished report carries it.
+    pub fn forget_project(&mut self) {
+        self.open = false;
+        self.destination = None;
+        self.youtube_source = None;
+        if !self.is_running() {
+            self.status = ExportStatus::Idle;
+        }
+    }
+
     pub fn resolved_destination(&self, project_name: &str) -> PathBuf {
         self.destination
             .clone()
@@ -412,6 +428,24 @@ impl AppModel {
         let media = MediaStore::for_project(&self.store, &project.metadata.id);
         let matte_root = Some(self.store.project_directory(&project.metadata.id));
         let scene_id = Some(project.current_scene_id.clone());
+
+        // The job refuses a clip whose file is gone (a video with holes must not be
+        // written, let alone published to YouTube), but it only knows the media id.
+        // Name the asset here, where the store is at hand, in the words the preview uses.
+        let resolver = StoreResolver::new(media);
+        if let Some(id) = cutix_playback::missing_media(&project, scene_id.as_deref(), &resolver)
+            .into_iter()
+            .next()
+        {
+            let assets = MediaStore::for_project(&self.store, &project.metadata.id);
+            let message = match assets.get(&id) {
+                Ok(asset) => t_args("preview.mediaMissing", &[("name", &asset.name)]),
+                Err(_) => t("preview.mediaMissing.unknown"),
+            };
+            self.export.status = ExportStatus::Failed(message);
+            cx.notify();
+            return;
+        }
         let frame_rate = project.settings.fps;
         let quality = self.export.quality;
         let include_audio = self.export.include_audio;
@@ -436,7 +470,6 @@ impl AppModel {
         let spawned = std::thread::Builder::new()
             .name("cutix-export".into())
             .spawn(move || {
-                let resolver = StoreResolver::new(media);
                 let count = destinations.len().max(1) as f32;
                 let mut last: Option<Result<RunOutcome, String>> = None;
                 for (index, ((destination, (width, height)), _)) in destinations

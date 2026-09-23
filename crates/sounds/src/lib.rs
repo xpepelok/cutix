@@ -85,6 +85,24 @@ impl SoundResult {
     pub fn playable_url(&self) -> Option<&str> {
         self.preview_url.as_deref().or(self.download_url.as_deref())
     }
+
+    /// Swaps a Freesound download URL that needs OAuth2 for the preview, which is what
+    /// a fresh search would carry now. Returns whether anything changed.
+    ///
+    /// Saved sounds are stored whole, so a result saved by an earlier build keeps the
+    /// `download` endpoint that answers 401 without OAuth — and would keep failing on
+    /// every "add to timeline" until it was un-saved and found again.
+    pub fn repair_download_url(&mut self) -> bool {
+        let stale = self
+            .download_url
+            .as_deref()
+            .is_some_and(freesound::is_oauth_download_url);
+        if !stale {
+            return false;
+        }
+        self.download_url = self.preview_url.clone();
+        true
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -238,6 +256,36 @@ mod tests {
         assert!(url.contains("category=sound_effect"));
         assert!(!url.to_lowercase().contains("api_key"));
         assert!(!url.to_lowercase().contains("token"));
+    }
+
+    #[test]
+    fn a_saved_freesound_result_drops_the_oauth_download_for_its_preview() {
+        let mut stale = stub("freesound:1234", SoundSource::Freesound);
+        stale.preview_url = Some("https://freesound.org/data/previews/1234-hq.mp3".to_string());
+        stale.download_url = Some("https://freesound.org/apiv2/sounds/1234/download/".to_string());
+        assert!(stale.repair_download_url());
+        assert_eq!(stale.download_url, stale.preview_url);
+        assert!(
+            !stale.repair_download_url(),
+            "the second pass finds nothing"
+        );
+
+        let mut fresh = stub("archive:album:a.mp3", SoundSource::Archive);
+        fresh.download_url = Some("https://archive.org/download/album/a.mp3".to_string());
+        assert!(!fresh.repair_download_url());
+        assert_eq!(
+            fresh.download_url.as_deref(),
+            Some("https://archive.org/download/album/a.mp3")
+        );
+
+        let mut no_preview = stub("freesound:9", SoundSource::Freesound);
+        no_preview.download_url =
+            Some("https://freesound.org/apiv2/sounds/9/download/".to_string());
+        assert!(no_preview.repair_download_url());
+        assert_eq!(
+            no_preview.download_url, None,
+            "better nothing to fetch than a URL that always answers 401"
+        );
     }
 
     #[test]

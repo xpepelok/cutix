@@ -424,6 +424,9 @@ impl<'a> Editor<'a> {
         self.commit("split", move |tracks, selection| {
             let mut created = Vec::new();
             let mut dropped: Vec<String> = Vec::new();
+            // Keeping only the left part creates and drops nothing, yet it is still an
+            // edit: the clip got shorter. Without tracking it the commit was refused.
+            let mut trimmed: Vec<String> = Vec::new();
             for track in tracks_mut(tracks) {
                 let mut additions = Vec::new();
                 for element in track.elements_mut().iter_mut() {
@@ -452,7 +455,9 @@ impl<'a> Editor<'a> {
                     right_fields.start_time = time;
                     right_fields.duration = right_visible;
                     right_fields.trim_start = add(base.trim_start, left_span);
-                    if retain != Retain::Left {
+                    if retain == Retain::Left {
+                        trimmed.push(base.id.clone());
+                    } else {
                         created.push(right_fields.id.clone());
                         additions.push(right);
                     }
@@ -470,9 +475,10 @@ impl<'a> Editor<'a> {
                     .elements_mut()
                     .retain(|element| !dropped.contains(&element.base().id));
             }
-            if created.is_empty() && dropped.is_empty() {
+            if created.is_empty() && dropped.is_empty() && trimmed.is_empty() {
                 return false;
             }
+            created.extend(trimmed);
             *selection = created;
             true
         })

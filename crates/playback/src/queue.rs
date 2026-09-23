@@ -117,9 +117,15 @@ impl FrameQueue {
     ///
     /// `is_due` decides whether the frame at the front should be presented yet. Stale
     /// frames are dropped regardless of whether they are due.
+    ///
+    /// `force_first` takes the oldest current frame even when it is not due yet. The
+    /// presenter sets it only while nothing is on screen: a blank preview is worse than
+    /// a frame slightly early, but once something is presented, popping an early frame
+    /// on every UI tick would run the picture ahead of the clock.
     pub(crate) fn take_due(
         &self,
         current: PlaybackGeneration,
+        force_first: bool,
         mut is_due: impl FnMut(&FrameSlot) -> bool,
     ) -> Option<FrameSlot> {
         let mut slots = self.lock();
@@ -129,7 +135,8 @@ impl FrameQueue {
                 slots.pop_front();
                 continue;
             }
-            if taken.is_some() && !is_due(front) {
+            let forced = force_first && taken.is_none();
+            if !forced && !is_due(front) {
                 break;
             }
             taken = slots.pop_front();
@@ -174,7 +181,9 @@ mod tests {
             queue.publish(slot(revision, generation));
         }
         assert_eq!(queue.len(), QUEUE_DEPTH);
-        let front = queue.take_due(generation, |_| false).expect("a due frame");
+        let front = queue
+            .take_due(generation, true, |_| false)
+            .expect("a due frame");
         assert_eq!(front.revision, 4, "the oldest frames are the ones dropped");
     }
 
@@ -188,10 +197,12 @@ mod tests {
 
         // The worker was mid-compose when the era ended and publishes anyway.
         queue.publish(slot(2, old));
-        assert!(queue.take_due(new, |_| true).is_none());
+        assert!(queue.take_due(new, false, |_| true).is_none());
 
         queue.publish(slot(3, new));
-        let taken = queue.take_due(new, |_| true).expect("the fresh frame");
+        let taken = queue
+            .take_due(new, false, |_| true)
+            .expect("the fresh frame");
         assert_eq!(taken.revision, 3);
     }
 
@@ -214,9 +225,12 @@ mod tests {
         queue.publish(slot(2, generation));
         queue.publish(slot(3, generation));
         let taken = queue
-            .take_due(generation, |_| false)
+            .take_due(generation, true, |_| false)
             .expect("a first frame");
-        assert_eq!(taken.revision, 1, "the first frame is always taken");
+        assert_eq!(
+            taken.revision, 1,
+            "the first frame is taken while nothing is on screen"
+        );
         assert_eq!(queue.len(), 2, "the rest wait until they are due");
     }
 
@@ -227,8 +241,30 @@ mod tests {
         for revision in 1..=3 {
             queue.publish(slot(revision, generation));
         }
-        let taken = queue.take_due(generation, |_| true).expect("a due frame");
+        let taken = queue
+            .take_due(generation, false, |_| true)
+            .expect("a due frame");
         assert_eq!(taken.revision, 3, "playback catches up rather than lagging");
         assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    fn an_early_frame_waits_once_something_is_already_presented() {
+        let queue = FrameQueue::new();
+        let generation = queue.generation();
+        queue.publish(slot(1, generation));
+        queue.publish(slot(2, generation));
+
+        assert!(
+            queue.take_due(generation, false, |_| false).is_none(),
+            "a frame ahead of the clock must not replace the one on screen"
+        );
+        assert_eq!(queue.len(), 2);
+
+        let taken = queue
+            .take_due(generation, false, |slot| slot.revision <= 1)
+            .expect("the frame that has become due");
+        assert_eq!(taken.revision, 1);
+        assert_eq!(queue.len(), 1);
     }
 }

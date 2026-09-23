@@ -68,8 +68,13 @@ fn main() {
         return;
     }
 
+    // The upload asks again on every poll whether to go on, so only a change is printed.
+    let mut last = None;
     let outcome = session.upload(&settings, &source, &mut |stage, percent| {
-        println!("  {stage:?} {percent}%");
+        if last != Some((stage, percent)) {
+            last = Some((stage, percent));
+            println!("  {stage:?} {percent}%");
+        }
         Control::Continue
     });
     session.close();

@@ -26,6 +26,8 @@ pub enum Action {
 
     ChooseAccount(String),
 
+    ReauthAccount(String),
+
     DismissPublished,
 
     CloseSession,
@@ -81,13 +83,45 @@ pub fn action_chip<V: Host>(
         }))
 }
 
-pub fn overlay(window: &Window, body: Div) -> gpui::AnyElement {
+/// The buttons a YouTube dialog ends with: the same component, size and variants as
+/// the app's other dialogs, rather than chips the size of the category tags.
+fn footer_button<V: Host>(
+    id: &'static str,
+    colors: Palette,
+    text: String,
+    primary: bool,
+    enabled: bool,
+    action: Action,
+    cx: &mut Context<V>,
+) -> Stateful<Div> {
+    use crate::components::{Button, ButtonVariant};
+    Button::new(id, colors)
+        .variant(if primary {
+            ButtonVariant::Default
+        } else {
+            ButtonVariant::Outline
+        })
+        .disabled(!enabled)
+        .label(text)
+        .build()
+        .on_click(cx.listener(move |this: &mut V, _, _, cx| {
+            this.youtube_action(action.clone(), cx);
+            cx.notify();
+        }))
+}
+
+pub fn overlay(window: &Window, id: &'static str, body: Div) -> gpui::AnyElement {
     use gpui::IntoElement;
     let size = window.viewport_size();
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
-            .child(div().w(size.width).h(size.height).child(body)),
+            .child(
+                div()
+                    .w(size.width)
+                    .h(size.height)
+                    .child(crate::appear::modal(body.size_full(), id)),
+            ),
     )
     .with_priority(3)
     .into_any_element()
@@ -103,6 +137,14 @@ pub fn label(colors: Palette, text: String) -> Div {
 pub fn heading(colors: Palette, text: String) -> Div {
     div()
         .text_size(rems(TEXT_BASE))
+        .text_color(colors.foreground)
+        .child(text)
+}
+
+/// The title of a YouTube dialog, sized like every other dialog title in the app.
+fn dialog_title(colors: Palette, text: String) -> Div {
+    div()
+        .text_size(rems(TEXT_LG))
         .text_color(colors.foreground)
         .child(text)
 }
@@ -580,7 +622,7 @@ pub fn schedule_picker<V: Host>(
                     if let Some(form) = this.youtube().form.as_mut() {
                         form.schedule_open = !form.schedule_open;
                         if form.schedule_open && form.schedule.is_none() {
-                            form.schedule = Some(Scheduled::soon(now));
+                            form.schedule = Some(Scheduled::soon(now, Zone::Local));
                         }
                     }
                     cx.notify();
@@ -901,13 +943,40 @@ pub fn set_chromeless(value: bool) {
 }
 
 static UPLOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SIGNING_IN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether an upload is queued or running; refreshed by the panel on every draw.
 pub fn set_uploading(value: bool) {
     UPLOADING.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
-fn uploading() -> bool {
+pub fn uploading() -> bool {
     UPLOADING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a sign-in or re-authorisation has a browser open; refreshed like
+/// [`set_uploading`].
+pub fn set_signing_in(value: bool) {
+    SIGNING_IN.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether restarting cutix now would cut a YouTube job short: an upload in flight
+/// or queued, or a browser open for a sign-in. Read by the titlebar's update pill,
+/// which cannot see the panel's state.
+pub fn busy() -> bool {
+    uploading() || SIGNING_IN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Closes the sign-in form, cancelling a sign-in that is still running. In publish-only
+/// mode the window has nothing left to show once the form is gone, so — unless an
+/// upload, a session summary or the account picker is still there — it asks to close.
+pub fn dismiss_sign_in(state: &mut Youtube) {
+    if let Some(form) = state.sign_in_form.as_ref() {
+        form.abandon();
+    }
+    state.sign_in_form = None;
+    state.should_close =
+        state.running.is_empty() && state.session.is_empty() && !state.choosing_account;
 }
 
 fn chromeless() -> bool {
@@ -1090,16 +1159,36 @@ pub fn account_row<V: Host>(
                         .text_color(colors.foreground)
                         .child(account.display_name()),
                 )
-                .child(label(colors, account.handle.clone())),
+                // An empty handle would still take a line and push the name above
+                // the avatar's centre.
+                .when(!account.handle.trim().is_empty(), |lines| {
+                    lines.child(label(colors, account.handle.clone()))
+                }),
         );
 
     if account.needs_reauth {
-        row = row.child(
-            div()
-                .text_size(rems(TEXT_XS))
-                .text_color(colors.caution)
-                .child(t("youtube.accounts.reauth")),
-        );
+        if state.is_reauthing(&id) {
+            let cancel_id = id.clone();
+            row = row
+                .child(label(colors, t("youtube.accounts.signingIn")))
+                .child(chip(
+                    SharedString::from(format!("yt-reauth-cancel-{id}")),
+                    colors,
+                    t("common.close"),
+                    false,
+                    move |state| state.cancel_reauth(&cancel_id),
+                    cx,
+                ));
+        } else {
+            row = row.child(action_chip(
+                SharedString::from(format!("yt-reauth-{id}")),
+                colors,
+                t("youtube.accounts.reauth"),
+                false,
+                Action::ReauthAccount(id.clone()),
+                cx,
+            ));
+        }
     }
 
     row.child(chip(
@@ -1348,7 +1437,8 @@ pub fn history_row<V: Host>(
                     colors,
                     format!(
                         "{} \u{00b7} {} \u{00b7} {}",
-                        youtube::iso_date(entry.uploaded_at),
+                        // The local date, the same day the date filter picks by.
+                        youtube::iso_date(Zone::Local.wall_clock(entry.uploaded_at)),
                         t(entry.privacy.message_key()),
                         t(entry.status.message_key())
                     ),
@@ -1482,7 +1572,8 @@ pub fn history_filters<V: Host>(
         .children(filter_calendar(colors, filters, Edge::To, cx))
         .child(label(colors, t("youtube.history.accounts")))
         .child(div().flex().flex_wrap().gap(px(8.0)).children(boxes))
-        .child(chip(
+        // In its own row so the column does not stretch it into a field-like bar.
+        .child(div().flex().child(chip(
             "yt-history-clear",
             colors,
             t("youtube.history.clear"),
@@ -1493,7 +1584,7 @@ pub fn history_filters<V: Host>(
                 }
             },
             cx,
-        ))
+        )))
 }
 
 fn add_account_button<V: Host>(colors: Palette, busy: bool, cx: &mut Context<V>) -> Stateful<Div> {
@@ -1711,22 +1802,20 @@ pub fn sign_in_dialog<V: Host>(
     let controls = div()
         .flex()
         .items_center()
-        .gap(px(6.0))
-        .child(chip(
-            "yt-sign-in-close",
-            colors,
-            t("common.close"),
-            false,
-            |state| {
-                if let Some(form) = state.sign_in_form.as_ref() {
-                    form.abandon();
-                }
-                state.sign_in_form = None;
-            },
-            cx,
-        ))
-        .child(div().flex_1())
-        .child(action_chip(
+        .justify_end()
+        .gap(px(8.0))
+        .pt(px(4.0))
+        .child(
+            crate::components::Button::new("yt-sign-in-close", colors)
+                .variant(crate::components::ButtonVariant::Outline)
+                .label(t("common.close"))
+                .build()
+                .on_click(cx.listener(|this: &mut V, _, _, cx| {
+                    dismiss_sign_in(this.youtube());
+                    cx.notify();
+                })),
+        )
+        .child(footer_button(
             "yt-sign-in-submit",
             colors,
             t(if form.busy {
@@ -1734,6 +1823,7 @@ pub fn sign_in_dialog<V: Host>(
             } else {
                 "youtube.signIn.submit"
             }),
+            true,
             ready && form.can_submit(),
             Action::SubmitSignIn,
             cx,
@@ -1746,11 +1836,7 @@ pub fn sign_in_dialog<V: Host>(
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(
-                div()
-                    .text_size(rems(TEXT_LG))
-                    .child(t("youtube.signIn.title")),
-            )
+            .child(dialog_title(colors, t("youtube.signIn.title")))
             .child(panel)
             .child(controls),
     ))
@@ -1974,14 +2060,15 @@ pub fn account_picker<V: Host>(
         .flex_col()
         .w_full()
         .gap(px(10.0))
-        .child(heading(colors, t("youtube.publish.pickAccount")))
+        .child(dialog_title(colors, t("youtube.publish.pickAccount")))
         .child(label(colors, file))
         .child(div().flex().flex_col().gap(px(6.0)).children(rows))
-        .child(div().flex().justify_end().pt(px(4.0)).child(action_chip(
+        .child(div().flex().justify_end().pt(px(4.0)).child(footer_button(
             "yt-pick-cancel",
             colors,
             t("common.cancel"),
             false,
+            true,
             Action::Dismiss,
             cx,
         )));
@@ -2149,10 +2236,11 @@ pub fn published_dialog<V: Host>(
                 .text_color(colors.muted_foreground)
                 .child(title),
         )
-        .child(div().pt(px(6.0)).child(action_chip(
+        .child(div().pt(px(6.0)).child(footer_button(
             "yt-published-ok",
             colors,
             t("youtube.session.close"),
+            true,
             true,
             Action::DismissPublished,
             cx,
@@ -2171,8 +2259,9 @@ pub fn published_toasts<V: Host>(state: &mut Youtube, colors: Palette, cx: &mut 
                 .copied_at
                 .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2));
             let url = toast.url.clone();
+            let appear_id = SharedString::from(format!("yt-toast-{}", toast.url));
 
-            div()
+            let card = div()
                 .flex()
                 .items_center()
                 .gap(px(10.0))
@@ -2256,7 +2345,8 @@ pub fn published_toasts<V: Host>(state: &mut Youtube, colors: Palette, cx: &mut 
                         }
                         cx.notify();
                     })),
-                )
+                );
+            crate::appear::toast(card, appear_id)
         })
         .collect::<Vec<_>>();
 
@@ -2504,7 +2594,7 @@ pub fn session_dialog<V: Host>(
         .flex_col()
         .w_full()
         .gap(px(8.0))
-        .child(heading(colors, t("youtube.session.title")))
+        .child(dialog_title(colors, t("youtube.session.title")))
         .when_some(state.notice.clone(), |this, message| {
             this.child(
                 div()
@@ -2525,10 +2615,11 @@ pub fn session_dialog<V: Host>(
                 .overflow_y_scroll()
                 .children(rows),
         )
-        .child(div().flex().justify_end().pt(px(4.0)).child(action_chip(
+        .child(div().flex().justify_end().pt(px(4.0)).child(footer_button(
             "yt-session-close",
             colors,
             t("youtube.session.close"),
+            true,
             true,
             Action::CloseSession,
             cx,
@@ -2646,7 +2737,8 @@ pub fn publish_dialog<V: Host>(
         ))
         .child(label(colors, t("youtube.publish.privacy")))
         .child(div().flex().gap(px(4.0)).children(privacies))
-        .child(chip(
+        // In its own row so the column does not stretch it into a field-like bar.
+        .child(div().flex().child(chip(
             SharedString::from("yt-form-more"),
             colors,
             if form.more_open {
@@ -2661,7 +2753,7 @@ pub fn publish_dialog<V: Host>(
                 }
             },
             cx,
-        ));
+        )));
 
     if form.more_open {
         body = body
@@ -2965,27 +3057,29 @@ pub fn publish_dialog<V: Host>(
         .flex_col()
         .w_full()
         .gap(px(12.0))
-        .child(heading(colors, t("youtube.publish.heading")))
+        .child(dialog_title(colors, t("youtube.publish.heading")))
         .child(columns)
         .child(
             div()
                 .flex()
                 .items_center()
                 .justify_end()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .pt(px(4.0))
-                .child(action_chip(
+                .child(footer_button(
                     "yt-form-cancel",
                     colors,
                     t("common.cancel"),
                     false,
+                    true,
                     Action::Dismiss,
                     cx,
                 ))
-                .child(action_chip(
+                .child(footer_button(
                     "yt-form-submit",
                     colors,
                     t("youtube.publish.submit"),
+                    true,
                     !blocked,
                     Action::Publish,
                     cx,

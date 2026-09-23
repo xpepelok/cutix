@@ -255,23 +255,19 @@ pub fn frame_at_with_color(
         .map(|track| track.timescale())
         .unwrap_or(1000)
         .max(1) as f64;
-    let target_ticks = (seconds.max(0.0) * timescale) as u64;
+    let max_lead = mp4
+        .tracks()
+        .get(&track_id)
+        .map(|track| half_nominal_frame(track.duration().as_secs_f64(), sample_count))
+        .unwrap_or(0.0);
 
-    let mut target_index = 1u32;
-    let mut keyframe_index = 1u32;
-    for index in 1..=sample_count {
-        let Ok(Some(sample)) = mp4.read_sample(track_id, index) else {
-            continue;
-        };
-        if sample.is_sync && sample.start_time <= target_ticks {
-            keyframe_index = index;
-        }
-        if sample.start_time <= target_ticks {
-            target_index = index;
-        } else {
-            break;
-        }
-    }
+    // Samples are read lazily, and the pick stops at the first one past the target.
+    let samples = (1..=sample_count).filter_map(|index| {
+        let sample = mp4.read_sample(track_id, index).ok().flatten()?;
+        Some((index, sample.start_time, sample.is_sync))
+    });
+    let (keyframe_index, target_index) =
+        one_shot_samples(samples, timescale, seconds.max(0.0), max_lead);
 
     let headers = mp4
         .tracks()
@@ -322,11 +318,100 @@ struct SampleEntry {
     is_sync: bool,
 }
 
+/// Half a frame at the track's average rate: how far ahead of a time the nearest-frame
+/// pick may reach. Zero, which always keeps the floor, when the rate is unknown.
+pub(crate) fn half_nominal_frame(duration_seconds: f64, frame_count: u32) -> f64 {
+    if duration_seconds > 0.0 && frame_count > 0 {
+        0.5 * duration_seconds / f64::from(frame_count)
+    } else {
+        0.0
+    }
+}
+
+/// Whether the frame starting at `next` is shown at `target` instead of the one at `floor`.
+///
+/// Taking the last frame at or before `target` is only right when the source and the
+/// timeline tick together. A variable-rate recording (ShadowPlay, phone cameras) has frame
+/// starts that wander around the timeline's, and a floor then shows one frame twice and
+/// skips the next whenever a start lands a hair after a timeline tick. So the next frame
+/// wins when it is strictly nearer, ties keeping the earlier one.
+///
+/// It must also be within `max_lead` (half a nominal frame) of the target. The jitter
+/// being absorbed is a fraction of a frame; across a real gap in a sparse recording (a
+/// static screen, then a click at 4.0 s) the nearer frame can be most of a second away,
+/// and showing it early would put the picture ahead of its sound.
+pub(crate) fn next_frame_is_nearer(target: f64, floor: f64, next: f64, max_lead: f64) -> bool {
+    floor <= target && next - target < (target - floor).min(max_lead)
+}
+
+/// The 1-based sample shown at `seconds`: the floor, or the one after it when
+/// [`next_frame_is_nearer`] says so.
+fn nearest_sample(index: &[SampleEntry], seconds: f64, max_lead: f64) -> usize {
+    let floor = index.partition_point(|entry| entry.start_seconds <= seconds);
+    if floor == 0 {
+        return 1;
+    }
+    match index.get(floor) {
+        Some(next)
+            if next_frame_is_nearer(
+                seconds,
+                index[floor - 1].start_seconds,
+                next.start_seconds,
+                max_lead,
+            ) =>
+        {
+            floor + 1
+        }
+        _ => floor,
+    }
+}
+
+/// The one-shot decode's `(keyframe, target)` samples for `seconds`, from `(index, start
+/// in ticks, is_sync)` in presentation order.
+///
+/// Compares in seconds exactly as [`nearest_sample`] does rather than rounding the target
+/// to ticks, so a still and playback pick the same frame; a rounded target turns a target
+/// just past a midpoint into a tie and keeps the earlier frame instead.
+fn one_shot_samples(
+    samples: impl IntoIterator<Item = (u32, u64, bool)>,
+    timescale: f64,
+    seconds: f64,
+    max_lead: f64,
+) -> (u32, u32) {
+    let mut target_index = 1u32;
+    let mut target_start: Option<f64> = None;
+    let mut keyframe_index = 1u32;
+    for (index, start_ticks, is_sync) in samples {
+        let start = start_ticks as f64 / timescale;
+        if start <= seconds {
+            if is_sync {
+                keyframe_index = index;
+            }
+            target_index = index;
+            target_start = Some(start);
+            continue;
+        }
+        // The first sample past the target, served instead when it is the nearer one.
+        if let Some(floor) = target_start
+            && next_frame_is_nearer(seconds, floor, start, max_lead)
+        {
+            if is_sync {
+                keyframe_index = index;
+            }
+            target_index = index;
+        }
+        break;
+    }
+    (keyframe_index, target_index)
+}
+
 pub struct NativeStream {
     mp4: mp4::Mp4Reader<BufReader<File>>,
     track_id: u32,
     timescale: f64,
     sample_count: u32,
+    /// Half a frame at the track's average rate; see [`next_frame_is_nearer`].
+    max_lead: f64,
     index: Vec<SampleEntry>,
     indexed_through: u32,
     decoder: Option<Decoder>,
@@ -362,6 +447,7 @@ impl NativeStream {
         let track_id = track.track_id();
         let timescale = track.timescale().max(1) as f64;
         let sample_count = track.sample_count();
+        let max_lead = half_nominal_frame(track.duration().as_secs_f64(), sample_count);
         let info = VideoInfo {
             width: track.width(),
             height: track.height(),
@@ -376,6 +462,7 @@ impl NativeStream {
             track_id,
             timescale,
             sample_count,
+            max_lead,
             index: Vec::new(),
             indexed_through: 0,
             decoder: None,
@@ -436,12 +523,10 @@ impl NativeStream {
 
     fn sample_for(&mut self, seconds: f64) -> u32 {
         let seconds = seconds.max(0.0);
+        // Covering `seconds` indexes one sample past it, which the nearest pick needs.
         self.index_covering(seconds);
 
-        let found = self
-            .index
-            .partition_point(|entry| entry.start_seconds <= seconds);
-        (found.max(1) as u32).min(self.sample_count.max(1))
+        (nearest_sample(&self.index, seconds, self.max_lead) as u32).min(self.sample_count.max(1))
     }
 
     pub fn decode_health(&self) -> (u64, u64) {
@@ -600,6 +685,100 @@ mod tests {
     #[test]
     fn annex_b_of_empty_input_is_empty() {
         assert!(annex_b(&[]).is_empty());
+    }
+
+    fn entries(starts: &[f64]) -> Vec<SampleEntry> {
+        starts
+            .iter()
+            .map(|start| SampleEntry {
+                start_seconds: *start,
+                is_sync: false,
+            })
+            .collect()
+    }
+
+    /// Half a frame at 60 fps.
+    const HALF_60: f64 = 0.5 / 60.0;
+
+    #[test]
+    fn a_cut_between_frames_takes_the_nearest_one() {
+        // A 60 fps recording whose frames drift a little late against the timeline.
+        let index = entries(&[0.0, 0.0172, 0.0339, 0.0505]);
+        // 1/60 s falls just before the second frame; a floor would repeat the first.
+        assert_eq!(nearest_sample(&index, 1.0 / 60.0, HALF_60), 2);
+        assert_eq!(nearest_sample(&index, 0.0339 + 0.001, HALF_60), 3);
+        assert_eq!(nearest_sample(&index, 0.0339 + 0.01, HALF_60), 4);
+    }
+
+    #[test]
+    fn a_time_exactly_between_frames_keeps_the_earlier_one() {
+        let index = entries(&[0.0, 0.5, 1.0]);
+        assert_eq!(nearest_sample(&index, 0.25, 0.25), 1);
+        assert_eq!(nearest_sample(&index, 0.75, 0.25), 2);
+    }
+
+    #[test]
+    fn times_outside_the_index_clamp_to_its_ends() {
+        let index = entries(&[0.1, 0.2]);
+        assert_eq!(nearest_sample(&index, 0.0, HALF_60), 1);
+        assert_eq!(nearest_sample(&index, 5.0, HALF_60), 2);
+        assert_eq!(nearest_sample(&[], 1.0, HALF_60), 1);
+    }
+
+    #[test]
+    fn a_frame_across_a_variable_rate_gap_is_not_shown_early() {
+        // A sparse screen recording averaging 30 fps: a static screen held from 3.0 s,
+        // then a click at 4.0 s. At 3.6 s the click frame is nearer, but showing it
+        // would put the picture 0.4 s ahead of the click's sound.
+        let index = entries(&[2.9667, 3.0, 4.0, 4.0333]);
+        let half_30 = half_nominal_frame(1.0, 30);
+        assert_eq!(nearest_sample(&index, 3.6, half_30), 2);
+        // Within half a frame of it the click frame is still the nearer one.
+        assert_eq!(nearest_sample(&index, 3.99, half_30), 3);
+    }
+
+    #[test]
+    fn an_unknown_rate_keeps_the_floor() {
+        assert_eq!(half_nominal_frame(0.0, 30), 0.0);
+        assert_eq!(half_nominal_frame(1.0, 0), 0.0);
+        let index = entries(&[0.0, 0.0172]);
+        assert_eq!(nearest_sample(&index, 0.017, 0.0), 1);
+    }
+
+    #[test]
+    fn the_one_shot_decode_picks_the_frame_playback_shows() {
+        // Timescale 1000 with samples at 33 and 51 ticks. 42.2 ticks is nearer 51, but
+        // rounding the target to 42 ticks made it a tie that kept the 33-tick sample.
+        let starts = [0u64, 33, 51, 67];
+        let timescale = 1_000.0;
+        let seconds = 0.0422;
+        let half_30 = half_nominal_frame(1.0, 30);
+        let samples = starts
+            .iter()
+            .enumerate()
+            .map(|(offset, start)| (offset as u32 + 1, *start, offset == 0));
+        let (keyframe, target) = one_shot_samples(samples, timescale, seconds, half_30);
+        let index = entries(
+            &starts
+                .iter()
+                .map(|start| *start as f64 / timescale)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(target, 3);
+        assert_eq!(target as usize, nearest_sample(&index, seconds, half_30));
+        assert_eq!(keyframe, 1);
+    }
+
+    #[test]
+    fn the_one_shot_decode_keeps_the_floor_across_a_gap() {
+        let samples = [(1u32, 0u64, true), (2, 3_000, false), (3, 4_000, true)];
+        let (keyframe, target) =
+            one_shot_samples(samples, 1_000.0, 3.6, half_nominal_frame(1.0, 30));
+        assert_eq!((keyframe, target), (1, 2));
+        // A step onto a keyframe decodes from that keyframe.
+        let (keyframe, target) =
+            one_shot_samples(samples, 1_000.0, 3.99, half_nominal_frame(1.0, 30));
+        assert_eq!((keyframe, target), (3, 3));
     }
 
     #[test]

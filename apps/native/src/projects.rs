@@ -1032,7 +1032,7 @@ impl ProjectsView {
             })
     }
 
-    fn grid_card(&mut self, summary: &ProjectSummary, cx: &mut Context<Self>) -> impl IntoElement {
+    fn grid_card(&mut self, summary: &ProjectSummary, cx: &mut Context<Self>) -> Div {
         let colors = self.colors(cx);
         let id = summary.id.clone();
         let selected = self.selected.contains(&id);
@@ -1165,7 +1165,11 @@ impl ProjectsView {
             )
     }
 
-    fn list_row(&mut self, summary: &ProjectSummary, cx: &mut Context<Self>) -> impl IntoElement {
+    fn list_row(
+        &mut self,
+        summary: &ProjectSummary,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
         let colors = self.colors(cx);
         let id = summary.id.clone();
         let selected = self.selected.contains(&id);
@@ -1270,7 +1274,8 @@ impl ProjectsView {
                 .flex()
                 .items_center()
                 .gap(px(10.0))
-                .mx(px(20.0))
+                // Lines up with the toolbar and the grid cards, both 32 px in.
+                .mx(px(32.0))
                 .mb(px(12.0))
                 .px(px(14.0))
                 .py(px(10.0))
@@ -1456,6 +1461,7 @@ fn dialog_shell(colors: Palette, body: impl IntoElement) -> Div {
         .items_center()
         .justify_center()
         .bg(opacity(gpui::black(), 0.55))
+        .occlude()
         .child(
             div()
                 .w(px(DIALOG_WIDTH_PX))
@@ -1770,7 +1776,11 @@ impl Render for ProjectsView {
         } else if view_mode == ViewMode::Grid {
             let cards = projects
                 .iter()
-                .map(|summary| self.grid_card(summary, cx))
+                .enumerate()
+                .map(|(index, summary)| {
+                    let id = SharedString::from(format!("appear-card-{}", summary.id));
+                    crate::appear::item(self.grid_card(summary, cx), id, index)
+                })
                 .collect::<Vec<_>>();
             div()
                 .flex()
@@ -1782,7 +1792,11 @@ impl Render for ProjectsView {
         } else {
             let rows = projects
                 .iter()
-                .map(|summary| self.list_row(summary, cx))
+                .enumerate()
+                .map(|(index, summary)| {
+                    let id = SharedString::from(format!("appear-row-{}", summary.id));
+                    crate::appear::item(self.list_row(summary, cx), id, index)
+                })
                 .collect::<Vec<_>>();
             div()
                 .flex()
@@ -1816,7 +1830,7 @@ impl Render for ProjectsView {
             .text_color(colors.foreground)
             .child(header)
             .child(toolbar)
-            .children(notice)
+            .children(notice.map(|banner| crate::appear::toast(banner, "projects-notice")))
             .child(
                 div()
                     .relative()
@@ -1841,9 +1855,9 @@ impl Render for ProjectsView {
             )
             .children(sort_menu)
             .children(card_menu)
-            .children(rename)
-            .children(delete)
-            .children(info)
+            .children(rename.map(|dialog| crate::appear::modal(dialog, "project-rename")))
+            .children(delete.map(|dialog| crate::appear::modal(dialog, "project-delete")))
+            .children(info.map(|dialog| crate::appear::modal(dialog, "project-info")))
     }
 }
 

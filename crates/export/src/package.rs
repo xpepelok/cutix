@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use cutix_project::store::PROJECT_FILE_NAME;
-use cutix_project::{Project, ProjectStore};
+use cutix_project::{MATTE_DIRECTORY_NAME, Project, ProjectStore};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -112,6 +113,38 @@ fn package_error(detail: impl std::fmt::Display) -> ExportError {
     ExportError::Package(detail.to_string())
 }
 
+/// Lower-cased file names of the mattes the saved document refers to, compared the
+/// way `cutix_project` itself compares them when it sweeps.
+fn referenced_matte_names(store: &ProjectStore, project: &Project) -> Result<HashSet<String>> {
+    Ok(store
+        .saved_matte_files(project)
+        .map_err(package_error)?
+        .into_iter()
+        .filter_map(|path| {
+            path.rsplit(['/', '\\'])
+                .next()
+                .map(|name| name.to_ascii_lowercase())
+        })
+        .collect())
+}
+
+/// Whether `relative` (a path under the project directory) is a matte file the saved
+/// document does not refer to.
+fn is_orphaned_matte(relative: &Path, referenced: &HashSet<String>) -> bool {
+    let in_matte_directory = relative
+        .components()
+        .next()
+        .and_then(|first| first.as_os_str().to_str())
+        == Some(MATTE_DIRECTORY_NAME);
+    if !in_matte_directory {
+        return false;
+    }
+    let Some(name) = relative.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    !referenced.contains(&name.to_ascii_lowercase())
+}
+
 pub fn export_package(
     store: &ProjectStore,
     project: &Project,
@@ -129,6 +162,13 @@ pub fn export_package(
     let mut files = Vec::new();
     collect(&root, &root, &mut files)?;
     files.sort();
+    // Saving does not sweep orphaned mattes (the undo history may still bring them
+    // back), so after a re-run cutout or a deleted clip the directory holds PNGs the
+    // document no longer refers to. They are not part of the project and would only
+    // bloat the archive, so they are left out here; the live directory itself must not
+    // be swept from an export.
+    let referenced = referenced_matte_names(store, project)?;
+    files.retain(|relative| !is_orphaned_matte(relative, &referenced));
 
     let linked = linked_sources(store, &project.metadata.id)?;
     let total = files.len() + linked.len();
@@ -478,6 +518,21 @@ mod tests {
             zip_name(Path::new("media").join("files").join("a.mp4").as_path()),
             "media/files/a.mp4"
         );
+    }
+
+    #[test]
+    fn only_unreferenced_files_inside_the_matte_directory_count_as_orphans() {
+        let referenced: HashSet<String> = ["abc.png".to_owned()].into_iter().collect();
+        let mattes = Path::new(MATTE_DIRECTORY_NAME);
+        assert!(!is_orphaned_matte(&mattes.join("abc.png"), &referenced));
+        assert!(!is_orphaned_matte(&mattes.join("ABC.PNG"), &referenced));
+        assert!(is_orphaned_matte(&mattes.join("def.png"), &referenced));
+        // Anything outside `mattes/` is the project's regardless of its name.
+        assert!(!is_orphaned_matte(
+            &Path::new("media").join("def.png"),
+            &referenced
+        ));
+        assert!(!is_orphaned_matte(Path::new("project.json"), &referenced));
     }
 
     #[test]
