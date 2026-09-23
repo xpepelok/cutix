@@ -61,19 +61,11 @@ pub struct PackageOutcome {
     pub entries: usize,
 }
 
-/// The media this project links to from outside its own directory, as
-/// `(entry name inside the archive, file on this machine)`.
-///
-/// Assets that already have a copy inside the project directory are skipped: they travel
-/// with the rest of the directory. Assets whose linked file cannot be found are an error
-/// rather than an omission — a package that silently leaves out media is not portable, and
-/// the person exporting it has no way to tell until they open it somewhere else.
 fn linked_sources(store: &ProjectStore, project_id: &str) -> Result<Vec<(String, PathBuf)>> {
     let media = cutix_project::MediaStore::for_project(store, project_id);
     let assets = media.list().map_err(package_error)?;
     let mut linked = Vec::new();
     for asset in assets {
-        // Ephemeral assets are scratch state, not part of what the project is made of.
         if asset.ephemeral || media.local_file(&asset).is_file() {
             continue;
         }
@@ -100,8 +92,6 @@ fn linked_sources(store: &ProjectStore, project_id: &str) -> Result<Vec<(String,
     Ok(linked)
 }
 
-/// Names the asset that cannot be packaged, so the message points at something the person
-/// exporting can actually go and fix.
 fn unresolved_media(asset: &cutix_project::MediaAssetData, detail: &str) -> ExportError {
     ExportError::Package(format!(
         "media `{}` ({}) {detail}, so the package would be incomplete",
@@ -113,8 +103,6 @@ fn package_error(detail: impl std::fmt::Display) -> ExportError {
     ExportError::Package(detail.to_string())
 }
 
-/// Lower-cased file names of the mattes the saved document refers to, compared the
-/// way `cutix_project` itself compares them when it sweeps.
 fn referenced_matte_names(store: &ProjectStore, project: &Project) -> Result<HashSet<String>> {
     Ok(store
         .saved_matte_files(project)
@@ -128,8 +116,6 @@ fn referenced_matte_names(store: &ProjectStore, project: &Project) -> Result<Has
         .collect())
 }
 
-/// Whether `relative` (a path under the project directory) is a matte file the saved
-/// document does not refer to.
 fn is_orphaned_matte(relative: &Path, referenced: &HashSet<String>) -> bool {
     let in_matte_directory = relative
         .components()
@@ -162,11 +148,6 @@ pub fn export_package(
     let mut files = Vec::new();
     collect(&root, &root, &mut files)?;
     files.sort();
-    // Saving does not sweep orphaned mattes (the undo history may still bring them
-    // back), so after a re-run cutout or a deleted clip the directory holds PNGs the
-    // document no longer refers to. They are not part of the project and would only
-    // bloat the archive, so they are left out here; the live directory itself must not
-    // be swept from an export.
     let referenced = referenced_matte_names(store, project)?;
     files.retain(|relative| !is_orphaned_matte(relative, &referenced));
 
@@ -263,16 +244,6 @@ pub fn export_package(
     })
 }
 
-/// Reads a package into the library as a new project.
-///
-/// The extraction is transactional: everything lands in a temporary directory beside the
-/// final one and is validated there, and only a complete, parseable project is moved into
-/// place. A malformed archive therefore leaves no half-written project in the library.
-///
-/// Media that the package carries a copy of is re-pointed at that copy. The source path
-/// recorded when the project was exported names a file on the machine it came from; on
-/// this machine that path is either absent or, worse, a different file. See
-/// `repoint_media_at_local_copies`.
 pub fn import_package(store: &ProjectStore, archive: &Path) -> Result<Project> {
     let file = File::open(archive).map_err(|error| ExportError::Io {
         path: archive.display().to_string(),
@@ -292,7 +263,6 @@ pub fn import_package(store: &ProjectStore, archive: &Path) -> Result<Project> {
         id = uuid::Uuid::new_v4().to_string();
     }
     let root = store.project_directory(&id);
-    // A sibling of the final directory, so the commit is a rename within one filesystem.
     let staging = staging_directory(&root);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|error| ExportError::Io {
@@ -308,7 +278,6 @@ pub fn import_package(store: &ProjectStore, archive: &Path) -> Result<Project> {
         return Err(error);
     }
 
-    // Commit. Nothing has been written under the final path until this point.
     if let Some(parent) = root.parent() {
         std::fs::create_dir_all(parent).map_err(|error| ExportError::Io {
             path: parent.display().to_string(),
@@ -326,8 +295,6 @@ pub fn import_package(store: &ProjectStore, archive: &Path) -> Result<Project> {
     let loaded = match store.load(&id) {
         Ok(loaded) => loaded,
         Err(error) => {
-            // The staged copy validated but the store still refuses it. Do not leave a
-            // project the library cannot open sitting in the library.
             let _ = std::fs::remove_dir_all(&root);
             return Err(package_error(error));
         }
@@ -340,7 +307,6 @@ pub fn import_package(store: &ProjectStore, archive: &Path) -> Result<Project> {
     Ok(project)
 }
 
-/// Where a package is unpacked before it is allowed into the library.
 fn staging_directory(root: &Path) -> PathBuf {
     let name = root
         .file_name()
@@ -350,11 +316,6 @@ fn staging_directory(root: &Path) -> PathBuf {
     parent.join(format!(".importing-{name}"))
 }
 
-/// Unpacks every file in the archive under `staging`.
-///
-/// Entries whose name escapes the archive root are skipped: `enclosed_name` answers `None`
-/// for an absolute path or one containing a parent-directory component, which is how a
-/// package could otherwise write outside the project directory.
 fn extract_into<R: Read + Seek>(zip: &mut ZipArchive<R>, staging: &Path) -> Result<()> {
     for index in 0..zip.len() {
         let mut entry = zip.by_index(index).map_err(package_error)?;
@@ -382,10 +343,6 @@ fn extract_into<R: Read + Seek>(zip: &mut ZipArchive<R>, staging: &Path) -> Resu
     Ok(())
 }
 
-/// Checks that the staged directory holds something the library will be able to open.
-///
-/// Runs before the commit so that a truncated or hand-edited archive is rejected while the
-/// only thing on disk is a temporary directory we are about to delete.
 fn validate_staged(staging: &Path) -> Result<()> {
     let document = staging.join(PROJECT_FILE_NAME);
     if !document.is_file() {
@@ -397,8 +354,6 @@ fn validate_staged(staging: &Path) -> Result<()> {
     })?;
     let raw: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| package_error(format!("project.json is not valid JSON: {error}")))?;
-    // Migration is what the store would run on load, so run it here where a failure is
-    // still recoverable.
     let (migrated, _report) = cutix_project::migrate_to_current(raw, &cutix_project::now_iso());
     serde_json::from_value::<Project>(migrated).map_err(|error| {
         package_error(format!(
@@ -438,17 +393,9 @@ fn validate_staged(staging: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Drops the recorded source path of any asset the package carries a copy of.
-///
-/// That path was absolute on the machine that exported the package. Here it either points
-/// at nothing or, in the case that actually loses work, at an unrelated file that happens
-/// to sit at the same location. The copy inside the project directory is the one this
-/// project means, so the link is removed and the local copy resolves instead.
 fn repoint_media_at_local_copies(staging: &Path) -> Result<()> {
     let media = cutix_project::MediaStore::new(staging.join("media"));
     let Ok(assets) = media.list() else {
-        // Validation already accepted the metadata; a project with no media directory has
-        // nothing to repoint.
         return Ok(());
     };
     for mut asset in assets {
@@ -456,7 +403,6 @@ fn repoint_media_at_local_copies(staging: &Path) -> Result<()> {
             continue;
         }
         if !media.local_file(&asset).is_file() {
-            // No copy travelled with the package, so the link is all this asset has.
             continue;
         }
         asset.source_path = None;
@@ -527,7 +473,6 @@ mod tests {
         assert!(!is_orphaned_matte(&mattes.join("abc.png"), &referenced));
         assert!(!is_orphaned_matte(&mattes.join("ABC.PNG"), &referenced));
         assert!(is_orphaned_matte(&mattes.join("def.png"), &referenced));
-        // Anything outside `mattes/` is the project's regardless of its name.
         assert!(!is_orphaned_matte(
             &Path::new("media").join("def.png"),
             &referenced

@@ -57,8 +57,6 @@ jobs:
 
       - run: cargo build -p cutix --release --locked
 
-      # FFmpeg decodes 1080p about four times faster than the openh264 fallback;
-      # without it the players cannot keep up with a 30 fps recording.
       - name: Bundle FFmpeg
         shell: bash
         run: bash scripts/bundle-ffmpeg.sh windows dist/ffmpeg
@@ -113,8 +111,6 @@ jobs:
 
       - run: cargo build -p cutix --release --locked
 
-      # FFmpeg decodes 1080p about four times faster than the openh264 fallback;
-      # without it the players cannot keep up with a 30 fps recording.
       - name: Bundle FFmpeg
         shell: bash
         run: bash scripts/bundle-ffmpeg.sh linux dist/ffmpeg
@@ -182,8 +178,6 @@ jobs:
 
       - run: cargo build -p cutix --release --locked
 
-      # FFmpeg decodes 1080p about four times faster than the openh264 fallback;
-      # without it the players cannot keep up with a 30 fps recording.
       - name: Bundle FFmpeg
         shell: bash
         run: bash scripts/bundle-ffmpeg.sh windows-arm64 dist/ffmpeg
@@ -239,8 +233,6 @@ jobs:
 
       - run: cargo build -p cutix --release --locked
 
-      # FFmpeg decodes 1080p about four times faster than the openh264 fallback;
-      # without it the players cannot keep up with a 30 fps recording.
       - name: Bundle FFmpeg
         shell: bash
         run: bash scripts/bundle-ffmpeg.sh linux-arm64 dist/ffmpeg

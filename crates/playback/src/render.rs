@@ -33,13 +33,6 @@ pub struct ComposeRequest<'a> {
     pub height: u32,
 }
 
-/// The media ids of visible video and image layers in the scene whose file `media`
-/// cannot resolve, in timeline order and without duplicates.
-///
-/// This is what a strict `compose` would fail on, answered up front: an export can
-/// refuse before creating its output file instead of rendering for minutes and then
-/// tripping over a clip near the end, and the app can name the asset in the message.
-/// Hidden layers and hidden tracks are not rendered, so their files do not count.
 pub fn missing_media(
     project: &Project,
     scene_id: Option<&str>,
@@ -167,10 +160,6 @@ pub struct FrameComposer {
     staging: StagingRing,
     budget: MemoryBudget,
     scratch: Scratch,
-    /// Whether a missing or undecodable media file fails the frame instead of dropping
-    /// its layer. The preview stays lenient so one moved file does not blank the whole
-    /// picture; the export job turns this on because a file with holes in it must not
-    /// be written (let alone auto-published) as if it were finished.
     strict_media: bool,
 }
 
@@ -292,8 +281,6 @@ impl FrameComposer {
         })
     }
 
-    /// Makes a missing or undecodable media file fail `compose` with the
-    /// `MediaNotFound` / decode error instead of silently dropping that layer.
     pub fn set_strict_media(&mut self, strict: bool) {
         self.strict_media = strict;
     }
@@ -633,9 +620,6 @@ impl FrameComposer {
                     if !is_visible(element, request.time) {
                         continue;
                     }
-                    // An adjustment layer has no pixels of its own: it filters everything
-                    // composed beneath it so far. Identity or unknown settings yield no
-                    // passes, and then there is nothing to apply.
                     let passes = crate::effects_map::effect_passes(
                         &effect.effect_type,
                         &effect.params,
@@ -656,10 +640,6 @@ impl FrameComposer {
                 if params.hidden {
                     continue;
                 }
-                // In the preview one missing or undecodable file must not blank the whole
-                // frame: drop just that layer, like stickers and graphics do. The reasons
-                // stay stable per media so callers can deduplicate them. An export runs
-                // strict instead, because a frame with a hole in it is not "done".
                 let Some(path) = media.resolve(params.media_id) else {
                     if self.strict_media {
                         return Err(PlaybackError::MediaNotFound(params.media_id.to_owned()));

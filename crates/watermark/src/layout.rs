@@ -139,9 +139,6 @@ pub fn compute_watermark_tile_rects(
 ) -> Vec<WatermarkRect> {
     let (lattice, base_step_x, base_step_y) = tile_lattice(canvas_size, source_size, watermark);
 
-    // Truncating the generated lattice at the cap would keep only the first rows, i.e.
-    // mark just the top strip of the frame. Instead the lattice is spread out until
-    // every visible tile fits, so small marks still cover the whole frame.
     let covered_width = canvas_size.width + 2.0 * lattice.cull_radius;
     let covered_height = canvas_size.height + 2.0 * lattice.cull_radius;
     let estimated_tiles = covered_width * covered_height / (base_step_x * base_step_y);
@@ -155,12 +152,10 @@ pub fn compute_watermark_tile_rects(
         if rects.len() <= MAX_WATERMARK_TILES || !stretch.is_finite() {
             return rects;
         }
-        // The area estimate ignores edge effects; nudge until the real count fits.
         stretch *= 1.05;
     }
 }
 
-/// The lattice a watermark tiles along, plus the unstretched step between tiles.
 fn tile_lattice(
     canvas_size: CanvasSize,
     source_size: SourceSize,
@@ -200,11 +195,6 @@ struct TileLattice {
 }
 
 impl TileLattice {
-    /// How far from the origin a tile centre can be and still touch the canvas.
-    ///
-    /// The origin is shifted off centre by the offset, so the distance is taken to the
-    /// farthest canvas corner rather than half the diagonal: with an 8% offset at
-    /// 1080p, half the diagonal falls short by ~176 px and the far corner loses tiles.
     fn reach(&self) -> f64 {
         let corners = [
             (0.0, 0.0),
@@ -554,8 +544,6 @@ mod tests {
         assert!(right > CANVAS.width * 0.9, "right tile at {right}");
     }
 
-    /// Every lattice point whose tile touches the canvas, found by sweeping an index
-    /// range far wider than any reach — the answer `rects` has to match.
     fn brute_force_centers(lattice: &TileLattice, step_x: f64, step_y: f64) -> Vec<(f64, f64)> {
         let canvas = lattice.canvas_size;
         let span = canvas.width.max(canvas.height) * 4.0;
@@ -616,8 +604,6 @@ mod tests {
                 angle,
             };
             let (lattice, step_x, step_y) = tile_lattice(canvas, source, &mark);
-            // The cap would stretch the step; the reach has to hold for whatever step
-            // is finally used, so both the base step and a stretched one are checked.
             for stretch in [1.0, 2.5] {
                 let (step_x, step_y) = (step_x * stretch, step_y * stretch);
                 let mut got: Vec<(f64, f64)> = lattice

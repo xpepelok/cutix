@@ -6,8 +6,6 @@ use std::time::Duration;
 use crate::MlError;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-/// Bounds the silence between two reads, not the whole transfer: model files are
-/// hundreds of MB, but a stalled connection must not hang the job forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn agent() -> ureq::Agent {
@@ -17,8 +15,6 @@ fn agent() -> ureq::Agent {
         .build()
 }
 
-/// Downloads `url` to `target` through a `.part` file that is only renamed into
-/// place once complete, so a cached file is never a truncated one.
 pub(crate) fn download_to(
     url: &str,
     target: &Path,
@@ -66,8 +62,6 @@ fn partial_path(target: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// A login wall, captive portal or error page arrives as HTML with status 200; saved
-/// as a model it would only fail much later with an opaque ONNX parse error.
 fn reject_html(content_type: Option<&str>, url: &str) -> Result<(), MlError> {
     let is_html = content_type.is_some_and(|value| {
         value

@@ -1,9 +1,5 @@
-//! Helpers the tests in this crate use and the shipping binary does not.
-
 use super::*;
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn text_animation_duration(element: &TimelineElement, key: &str) -> Option<MediaTime> {
     text_animation_settings(element)
@@ -13,8 +9,6 @@ pub fn text_animation_duration(element: &TimelineElement, key: &str) -> Option<M
         .map(MediaTime::from_ticks)
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub(crate) fn apply_reverse_swap(
     video: &mut VideoElement,

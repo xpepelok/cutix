@@ -1,5 +1,3 @@
-//! Building new elements that are not driven by a media asset.
-
 use super::*;
 
 pub(crate) fn new_base(name: String) -> BaseElementFields {

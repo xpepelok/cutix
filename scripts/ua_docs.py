@@ -12,11 +12,9 @@ NOTES = os.path.join(ROOT, ".ua", "intermediate", "notes.json")
 
 KIND_ORDER = ["mod", "trait", "struct", "enum", "type", "const", "static", "fn", "async_fn", "impl"]
 
-
 def load():
     with io.open(INDEX, encoding="utf-8") as handle:
         return json.load(handle)
-
 
 def load_notes():
     if not os.path.isfile(NOTES):
@@ -24,12 +22,10 @@ def load_notes():
     with io.open(NOTES, encoding="utf-8") as handle:
         return json.load(handle)
 
-
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with io.open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text)
-
 
 def cargo_dependencies():
     edges = defaultdict(set)
@@ -50,7 +46,6 @@ def cargo_dependencies():
             edges["cutix"].add(match.group(1))
     return edges
 
-
 def module_edges(entries):
     edges = defaultdict(Counter)
     for entry in entries:
@@ -62,7 +57,6 @@ def module_edges(entries):
                 if target != entry["module"]:
                     edges[(entry["crate"], entry["module"])][target] += 1
     return edges
-
 
 def web_edges(entries):
     edges = defaultdict(Counter)
@@ -78,10 +72,8 @@ def web_edges(entries):
                 edges[area][target] += 1
     return edges
 
-
 def mermaid_id(name):
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
-
 
 def crate_graph_page(entries, deps):
     sizes = Counter()
@@ -116,7 +108,6 @@ def crate_graph_page(entries, deps):
     lines.append("")
     return "\n".join(lines)
 
-
 def module_graph_page(crate, entries, edges):
     own = [entry for entry in entries if entry["crate"] == crate]
     lines = [
@@ -138,7 +129,6 @@ def module_graph_page(crate, entries, edges):
     lines += ["```", ""]
     return "\n".join(lines)
 
-
 def item_block(item, notes):
     marker = "pub" if item["public"] else "private"
     head = f"#### `{item['name']}` — {item['kind']}, {marker}, line {item['line']}"
@@ -151,7 +141,6 @@ def item_block(item, notes):
         body += [f"- {note}" for note in written]
     body.append("")
     return "\n".join(body)
-
 
 def reference_page(crate, entries, edges, deps, notes):
     own = sorted(
@@ -207,10 +196,8 @@ def reference_page(crate, entries, edges, deps, notes):
                 lines.append(item_block(item, file_notes))
     return "\n".join(lines) + "\n"
 
-
 def relative(path):
     return "../../../" + path
-
 
 def web_page(entries, edges):
     own = sorted([entry for entry in entries if entry["crate"] == "web"], key=lambda item: item["path"])
@@ -254,7 +241,6 @@ def web_page(entries, edges):
                 lines.append(f"| `{item['name']}` | {item['kind']} | {item['line']} |")
             lines.append("")
     return "\n".join(lines) + "\n"
-
 
 def knowledge_graph(entries, deps, edges):
     nodes = []
@@ -300,7 +286,6 @@ def knowledge_graph(entries, deps, edges):
             )
     return {"version": 1, "project": "Cutix", "nodes": nodes, "links": links}
 
-
 def main():
     entries = load()
     notes = load_notes()
@@ -319,6 +304,5 @@ def main():
         json.dump(graph, handle, ensure_ascii=False, indent=1)
 
     print(len(crates), "crates,", len(graph["nodes"]), "nodes,", len(graph["links"]), "links")
-
 
 main()

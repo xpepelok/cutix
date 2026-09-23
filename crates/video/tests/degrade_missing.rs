@@ -1,8 +1,6 @@
 fn point_at_an_empty_directory() {
     let directory = std::env::temp_dir().join("cutix-ffmpeg-absent");
     std::fs::create_dir_all(&directory).expect("temp dir");
-    // Mutating the environment is unsound while another thread may be reading it.
-    // These tests run single-threaded against a variable only this test touches.
     unsafe { std::env::set_var(video::ffmpeg::DIR_ENV, &directory) };
 }
 

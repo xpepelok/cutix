@@ -226,24 +226,15 @@ pub struct AppModel {
     pub store: ProjectStore,
     pub projects: Vec<ProjectSummary>,
     pub projects_loaded: bool,
-    /// Bumped by every project-list refresh, so a slow listing that finishes after a
-    /// newer one cannot put deleted projects back.
     projects_generation: u64,
-    /// The sequence number of the newest snapshot handed to a writer, and the one the
-    /// disk holds. Background saves can finish out of order; writing through the gate
-    /// one at a time and skipping anything older keeps the newest edit on disk.
     save_sequence: u64,
     save_gate: std::sync::Arc<std::sync::Mutex<u64>>,
-    /// Bumped by every open and close, so a slow load that finishes after the user
-    /// opened something else (or closed it) does not take over the editor.
     open_generation: u64,
     pub route: Route,
     pub project: Option<Project>,
     pub media: Vec<MediaAssetData>,
     pub media_root: Option<PathBuf>,
     pub importing: usize,
-    /// Files waiting for their project to finish opening; handed over only to that
-    /// project, so a superseded open cannot leave them for whichever loads next.
     pub pending_import: Option<PendingImport>,
     pub editor_origin: Route,
     pub notice: Option<String>,
@@ -285,13 +276,10 @@ pub struct AppModel {
     debounce_token: u64,
 }
 
-/// An import queued before its project was open, tagged with the project it is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingImport {
     pub project_id: String,
     pub paths: Vec<PathBuf>,
-    /// A single file goes onto the timeline at the playhead rather than only into
-    /// the media list.
     pub onto_timeline: bool,
 }
 
@@ -307,8 +295,6 @@ pub enum WaveformState {
 }
 
 impl AppModel {
-    /// Only the tests in this file ask this; compiled for them alone so the shipping
-    /// binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn is_dirty(&self) -> bool {
         self.dirty
@@ -592,8 +578,6 @@ impl AppModel {
             let loaded = cx
                 .background_spawn(async move {
                     let project = store.load(&id)?.project;
-                    // A fresh load has no undo history, so orphaned mattes are safe
-                    // to drop here.
                     let _ = store.sweep_mattes(&project);
                     let media = MediaStore::for_project(&store, &id);
                     let assets = media.list().unwrap_or_default();
@@ -612,8 +596,6 @@ impl AppModel {
                 match loaded {
                     Ok((project, media, root)) => {
                         if this.project.is_some() {
-                            // Opening straight over another project: the previous
-                            // one's preview goes with it.
                             this.stop_preview(cx);
                         }
                         this.export.forget_project();
@@ -628,9 +610,6 @@ impl AppModel {
                         this.playhead = time::MediaTime::ZERO;
                         this.route = Route::Editor;
                         this.start_preview(cx);
-                        // Whatever was queued is taken either way: an import queued
-                        // for a project whose open this one superseded must not land
-                        // on this project's timeline.
                         if let Some(waiting) = this
                             .pending_import
                             .take()
@@ -656,8 +635,6 @@ impl AppModel {
 
     pub fn close_project(&mut self, cx: &mut Context<Self>) {
         self.save_now();
-        // Saves keep every matte the undo history might still bring back; with the
-        // history about to go, whatever the saved document does not reference can go.
         if let Some(project) = self.project.as_ref() {
             let _ = self.store.sweep_mattes(project);
         }
@@ -679,11 +656,6 @@ impl AppModel {
 
     pub fn rename_project(&mut self, id: &str, name: String, cx: &mut Context<Self>) {
         if self.is_open(id) {
-            // The open document is authoritative and its saves go through the gate
-            // in order. Renaming on disk behind it would race the autosave: a write
-            // in flight could put the old name back, or the rename's own load-save
-            // could drop an edit that write carried. So the name changes in memory
-            // and is written the same way every edit is.
             if let Some(project) = self.project.as_mut() {
                 project.metadata.name = name;
                 project.metadata.updated_at = cutix_project::now_iso();
@@ -703,11 +675,6 @@ impl AppModel {
             let _ = this.update(cx, |this, cx| {
                 match renamed {
                     Ok(renamed) => {
-                        // The project may have been opened while the rename ran. Only
-                        // the name comes back from disk: replacing the whole project
-                        // would throw away edits made meanwhile. The merged document
-                        // is then written again through the gate, so whichever write
-                        // landed last, the disk ends up matching memory.
                         if let Some(current) = this
                             .project
                             .as_mut()
@@ -800,8 +767,6 @@ impl AppModel {
             let _ = this.update(cx, |this, cx| {
                 let (imported, label, root) = outcome;
                 this.importing = this.importing.saturating_sub(1);
-                // The file landed in its own project's store either way; it only
-                // joins the editor if that project is still the one open.
                 if !this.is_open(&owner) {
                     cx.notify();
                     return;
@@ -1090,9 +1055,6 @@ impl AppModel {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        // Compared in reduced form: a project saved before frame rates were reduced holds
-        // the same rate written as a different fraction, and adopting it again would mark
-        // the project dirty for no change the user made.
         if project.settings.fps.reduced() == rate.reduced() {
             return;
         }
@@ -1427,10 +1389,6 @@ fn list_readable_projects(store: &ProjectStore) -> (Vec<ProjectSummary>, usize) 
     (summaries, unreadable)
 }
 
-/// Writes a snapshot unless a newer one already reached the disk.
-///
-/// Holding the gate for the whole write also keeps two writers from interleaving
-/// their matte files and renames.
 fn write_in_order(
     gate: &std::sync::Mutex<u64>,
     sequence: u64,
@@ -1464,11 +1422,6 @@ fn write_project(
     let _ = store.save(project);
 }
 
-/// Adds imported assets the editor does not hold yet.
-///
-/// The store writes each file's metadata as soon as that file is done, so closing
-/// and reopening the project in the middle of a batch lists the finished ones on
-/// reopen. The batch then arrives with those same ids and must not add them twice.
 fn merge_imported(
     media: &mut Vec<MediaAssetData>,
     imported: impl IntoIterator<Item = MediaAssetData>,
@@ -1583,8 +1536,6 @@ mod autosave_tests {
         let other = store.create("Other").expect("create other");
 
         model.update(cx, |this, cx| {
-            // What open_video_as_project does once the project exists, then the
-            // user opens another project before the first load lands.
             this.pending_import = Some(PendingImport {
                 project_id: fresh.metadata.id.clone(),
                 paths: vec![clip],
@@ -1624,7 +1575,6 @@ mod autosave_tests {
             "the open document has to carry the name, it is what later saves write"
         );
 
-        // A later autosave writes the in-memory document; the name must survive it.
         model.update(cx, |this, cx| {
             if let Some(project) = this.project.as_mut() {
                 project.metadata.duration = time::MediaTime::from_ticks(3 * 120_000);
@@ -1769,7 +1719,6 @@ mod tests {
 
     #[test]
     fn a_batch_that_finishes_after_a_reopen_does_not_list_its_files_twice() {
-        // The reopen already listed `a` from the store; the batch brings it again.
         let mut media = vec![asset("a")];
         merge_imported(&mut media, [asset("a"), asset("b")]);
         let ids: Vec<&str> = media.iter().map(|asset| asset.id.as_str()).collect();

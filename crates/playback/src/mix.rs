@@ -30,7 +30,6 @@ pub struct AudioBuffer {
 }
 
 impl AudioBuffer {
-    /// How many frames the buffer holds. A buffer with no channels holds none.
     pub fn frame_count(&self) -> usize {
         self.interleaved
             .len()
@@ -100,11 +99,6 @@ fn audible<'a>(track: &'a Track, element: &'a TimelineElement) -> Option<Audible
     }
 }
 
-/// The timeline span in which an element is heard, in seconds.
-///
-/// A transition is centred on the cut, so the outgoing clip keeps sounding for half the
-/// transition past its own end and the incoming one starts half the transition before
-/// its own start, exactly as the picture keeps showing both.
 fn audible_span(element: &TimelineElement, edges: Option<&ElementEdges>) -> (f64, f64) {
     let base = element.base();
     let start = base.start_time.to_seconds_f64();
@@ -120,13 +114,6 @@ fn audible_span(element: &TimelineElement, edges: Option<&ElementEdges>) -> (f64
     (head, tail)
 }
 
-/// The transition edges as the sound sees them.
-///
-/// The picture shows an incoming clip from the start of the centred window and simply
-/// freezes on its first frame when the clip has no head handle to reach back into.
-/// Sound cannot freeze: until the handle begins there is nothing to play, so the
-/// fade-in is rebased to start where the first audible sample is. Otherwise a clip with
-/// a short handle would jump in part-way up the ramp, which is heard as a click.
 fn audio_edges(
     edges: &ElementEdges,
     element: &TimelineElement,
@@ -135,8 +122,6 @@ fn audio_edges(
     let mut edges = edges.clone();
     if let Some(incoming) = edges.incoming.as_mut() {
         let base = element.base();
-        // The handle is measured in source seconds; played at the clip's starting speed
-        // it covers a different stretch of the timeline.
         let rate = effective_rate_at(retime, 0.0);
         let head_ticks = if rate > 0.0 {
             (base.trim_start.as_ticks() as f64 / rate).round() as i64
@@ -151,11 +136,6 @@ fn audio_edges(
     edges
 }
 
-/// The fade a transition applies to this element's sound at `time`.
-///
-/// Uses the same edges as the picture, so the fade is clamped to the neighbours'
-/// lengths, only happens where there is a neighbour to cross into, and runs over the
-/// same centred window as the visual transition.
 fn transition_gain(edges: Option<&ElementEdges>, time: MediaTime) -> f64 {
     match resolve_active_transition(edges, time) {
         Some(active) => match active.role {
@@ -185,11 +165,6 @@ fn sample_at(buffer: &PcmBuffer, channel: usize, source_seconds: f64) -> f32 {
     data[lower] * (1.0 - fraction) + data[upper] * fraction
 }
 
-/// The value output channel `output` of `outputs` takes from the source at
-/// `source_seconds`.
-///
-/// Clamping the channel index is not a mapping: stereo into 5.1 would copy R into
-/// C/LFE/SL/SR, and stereo into mono would drop R entirely.
 fn mapped_sample(buffer: &PcmBuffer, output: usize, outputs: usize, source_seconds: f64) -> f32 {
     let sources = buffer.channels.min(buffer.samples.len());
     if sources == 0 {
@@ -210,26 +185,14 @@ fn mapped_sample(buffer: &PcmBuffer, output: usize, outputs: usize, source_secon
     if outputs == 2 && sources >= 3 {
         return fold_surround_into_stereo(buffer, output, sources, source_seconds);
     }
-    // Both layouts follow the order WAVE and ffmpeg default to (FL FR FC LFE BL BR SL
-    // SR), so the channels they have in common sit at the same index. A 5.1 source on
-    // a 7.1 device keeps its dialogue and rears; the channels only one side has stay
-    // silent rather than guessing at an upmix.
     if output < sources.min(outputs) {
         return sample_at(buffer, output, source_seconds);
     }
     0.0
 }
 
-/// -3 dB: the weight a channel gets when it is shared between two outputs or moved
-/// from the rear to the front, so it neither dominates nor disappears.
 const FOLD_WEIGHT: f32 = std::f32::consts::FRAC_1_SQRT_2;
 
-/// Folds a surround source into one stereo output channel.
-///
-/// FL/FR keep their own side, the centre (dialogue) goes to both sides, and each rear
-/// or side channel goes to its own side, all at -3 dB. The LFE is left out, as the
-/// usual decoder downmix does. Dividing by the total weight keeps a full-scale source
-/// from clipping. Assumes the 5.1 / 7.1 order: FL FR FC LFE BL BR SL SR.
 fn fold_surround_into_stereo(
     buffer: &PcmBuffer,
     output: usize,
@@ -322,16 +285,11 @@ pub fn mix(
                     continue;
                 }
                 let clip_seconds = timeline_seconds - clip_start;
-                // Inside a transition the incoming clip plays its head handle before its
-                // own start, at the speed it starts with, and the outgoing one runs on
-                // into its trimmed tail, like the picture. A clip with no handle reads a
-                // negative source time there and `sample_at` keeps it silent.
                 let source_seconds = if clip_seconds >= 0.0 {
                     trim_start + source_offset_seconds(entry.retime, clip_seconds)
                 } else {
                     trim_start + clip_seconds * head_rate
                 };
-                // Volume keys are authored from the clip's own start, not the handle.
                 let local_ticks = clip_seconds.max(0.0) * time::TICKS_PER_SECOND as f64;
                 let base_db = if animated_volume {
                     scalar_at(
@@ -454,12 +412,10 @@ mod tests {
             clip("b", 2.0, 2.0, Some(10.0)),
         ]);
         let edges = build_track_transition_edges(&track);
-        // Clamped to the shorter clip: the window is 1..3 s, not 10 s wide.
         assert!((transition_gain(edges.get("b"), at(2.5)) - 0.75).abs() < 1e-6);
         assert_eq!(transition_gain(edges.get("b"), at(3.2)), 1.0);
     }
 
-    /// One frame per channel, each channel holding its own index + 1 as a constant.
     fn constant_channels(channels: usize) -> PcmBuffer {
         PcmBuffer {
             sample_rate: 1,
@@ -503,8 +459,6 @@ mod tests {
     fn surround_into_stereo_folds_the_centre_and_rears_and_drops_the_lfe() {
         let side = std::f32::consts::FRAC_1_SQRT_2;
         let weight = 1.0 + side + side;
-        // FL FR FC LFE BL BR = 1 2 3 4 5 6: the centre lands on both sides, each rear on
-        // its own side, and the LFE (4) appears nowhere.
         let expected = [
             (1.0 + side * 3.0 + side * 5.0) / weight,
             (2.0 + side * 3.0 + side * 6.0) / weight,
@@ -517,7 +471,6 @@ mod tests {
             );
         }
 
-        // 7.1 adds SL/SR (7, 8) into their own sides with the same weight.
         let weight = 1.0 + side * 3.0;
         let wide = mapped(8, 2);
         assert!((wide[0] - (1.0 + side * (3.0 + 5.0 + 7.0)) / weight).abs() < 1e-5);
@@ -539,9 +492,7 @@ mod tests {
 
     #[test]
     fn different_multichannel_layouts_keep_their_common_channels_one_to_one() {
-        // 5.1 on a 7.1 device keeps dialogue and rears; the side pair stays silent.
         assert_eq!(mapped(6, 8), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0]);
-        // 7.1 into 5.1 drops only the side pair.
         assert_eq!(mapped(8, 6), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     }
 
@@ -566,14 +517,11 @@ mod tests {
         let element = &track.elements()[1];
         let sound = super::audio_edges(edges.get("b").unwrap(), element, None);
         let rebased = sound.incoming.as_ref().unwrap();
-        // 0.2 s of handle: the fade starts at 1.8 s, not at the window's 1.5 s, and
-        // still ends with the picture at 2.5 s.
         assert_eq!(rebased.start_time, at(1.8));
         assert_eq!(rebased.end_time, at(2.5));
         assert_eq!(transition_gain(Some(&sound), at(1.8)), 0.0);
         assert_eq!(transition_gain(Some(&sound), at(2.5)), 1.0);
 
-        // A handle longer than half the window changes nothing.
         let mut long = clip("b", 2.0, 2.0, Some(1.0));
         long["trimStart"] = json!(at(3.0).as_ticks());
         let track = video_track(vec![clip("a", 0.0, 2.0, None), long]);

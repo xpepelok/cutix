@@ -41,15 +41,10 @@ pub enum Transfer {
     Unspecified,
 }
 
-/// The Y, U and V planes of a decoded frame, borrowed from the frame that owns them.
-///
-/// The strides are not derivable from the frame width: FFmpeg pads each row for
-/// alignment, so a plane's row length has to travel alongside its bytes.
 struct DecodedPlanes<'frame> {
     y: &'frame [u8],
     u: &'frame [u8],
     v: &'frame [u8],
-    /// Row length in bytes for the Y, U and V planes respectively.
     strides: (usize, usize, usize),
 }
 
@@ -141,20 +136,13 @@ struct Demuxer {
     scaler_key: Option<ScalerKey>,
     stream_index: c_int,
     time_base: f64,
-    /// The instant frame times are measured from, in seconds: the file's [`media_origin`],
-    /// shared with the audio decoder. MPEG-TS and M2TS recordings start at an arbitrary
-    /// point such as 1.4 s; frame times are reported from here and seeks add it back.
     start_offset: f64,
-    /// Seconds between frames at the stream's average rate, for filling in a frame that
-    /// arrives with no timestamp at all.
     nominal_span: f64,
-    /// The time given to the previous decoded frame, the base for such a fill-in.
     previous_timestamp: Option<f64>,
     info: VideoInfo,
     dynamic_range: DynamicRange,
 }
 
-/// A stream's `start_time` in seconds, or zero when the container does not give one.
 pub(crate) fn stream_start_seconds(start_time: i64, time_base: f64) -> f64 {
     if start_time == sys::AV_NOPTS_VALUE || time_base <= 0.0 {
         return 0.0;
@@ -162,15 +150,6 @@ pub(crate) fn stream_start_seconds(start_time: i64, time_base: f64) -> f64 {
     start_time as f64 * time_base
 }
 
-/// The instant, in seconds on the container's clock, that both the video and the audio
-/// decoder call zero.
-///
-/// One origin for the whole file rather than one per stream: in a transport stream the
-/// video typically starts a few frames after the audio (1.4667 s against 1.4000 s, from
-/// B-frame reordering), and measuring each from its own start would throw that offset
-/// away and play the sound 67 ms late against the picture. The container's `start_time`
-/// is the earliest start of any stream; without one, `fallback` (the video stream's start,
-/// or zero) stands in.
 pub(crate) fn media_origin_seconds(format_start: i64, fallback: f64) -> f64 {
     if format_start == sys::AV_NOPTS_VALUE {
         return fallback;
@@ -178,10 +157,6 @@ pub(crate) fn media_origin_seconds(format_start: i64, fallback: f64) -> f64 {
     format_start as f64 / AV_TIME_BASE
 }
 
-/// [`media_origin_seconds`] for an opened file, falling back to its best video stream.
-///
-/// # Safety
-/// `format` must be an open format context on which stream info has been found.
 pub(crate) unsafe fn media_origin(api: &Api, format: *mut AVFormatContext) -> f64 {
     let format_start = unsafe { (*format).start_time };
     if format_start != sys::AV_NOPTS_VALUE {
@@ -199,12 +174,6 @@ pub(crate) unsafe fn media_origin(api: &Api, format: *mut AVFormatContext) -> f6
     media_origin_seconds(format_start, stream_start_seconds(start_time, time_base))
 }
 
-/// Where a decoded frame sits, in seconds from the file's [`media_origin`].
-///
-/// The presentation timestamp decides when it has one. Some streams (raw H.264, a few
-/// broken muxers) leave it unset, and reading that marker as zero sent every such frame
-/// back to the start; the decode timestamp is the next best, and failing that the frame
-/// follows the previous one by a nominal frame.
 fn frame_seconds(
     pts: i64,
     dts: i64,
@@ -465,10 +434,6 @@ impl Demuxer {
         seconds
     }
 
-    /// Converts the frame the decoder is currently holding into an RGBA image.
-    ///
-    /// Takes `&mut self` because the conversion runs through the decoder's own scratch
-    /// buffers and scaler cache rather than allocating fresh ones per frame.
     fn render_rgba(&mut self, override_spec: Option<ColorSpec>) -> Result<Frame, DecodeError> {
         let width = unsafe { (*self.frame).width }.max(0) as usize;
         let height = unsafe { (*self.frame).height }.max(0) as usize;
@@ -530,10 +495,6 @@ impl Demuxer {
         })
     }
 
-    /// The three planes of a decoded frame together with their row strides in bytes.
-    ///
-    /// The strides are not derivable from the width: FFmpeg pads rows for alignment, so
-    /// each plane's row length has to travel with it.
     unsafe fn planes(&self, width: usize, height: usize) -> DecodedPlanes<'_> {
         let y_stride = unsafe { (*self.frame).linesize[0] }.max(0) as usize;
         let u_stride = unsafe { (*self.frame).linesize[1] }.max(0) as usize;
@@ -829,9 +790,6 @@ pub fn frame_at_with_color(
 
 const TIMESTAMP_TOLERANCE: f64 = 1e-6;
 
-/// True when the frame at `next` is served at `target` instead of the one at `floor`: the
-/// same rule as the native decoder, capped at half a nominal frame so a frame across a
-/// variable-rate gap is not shown early.
 fn nearer_than_floor(target: f64, floor: f64, next: f64, nominal_span: f64) -> bool {
     crate::decode::next_frame_is_nearer(target, floor, next, 0.5 * nominal_span)
 }
@@ -854,12 +812,8 @@ pub struct FfmpegStream {
     demuxer: Demuxer,
     spec: Option<ColorSpec>,
     positioned: bool,
-    /// The last decoded frame at or before the most recent target.
     current: Option<Step>,
-    /// The first decoded frame after it, read ahead to know `current` is the last one.
     held: Option<Step>,
-    /// The timestamp of the frame actually returned, which is `held` when that one is
-    /// nearer the target. Callers key "same frame, skip the redraw" on it.
     served: f64,
     seeks: u64,
     decoded_samples: u64,
@@ -901,7 +855,6 @@ impl FfmpegStream {
         self.served
     }
 
-    /// Forgets the decode position after a seek, so nothing stale is served or compared.
     fn forget_position(&mut self) {
         self.positioned = true;
         self.current = None;
@@ -992,10 +945,6 @@ impl FfmpegStream {
                 self.current = self.held.take();
             }
 
-            // `current` stays the floor so the backwards and far-ahead checks keep
-            // measuring from a frame at or before the target, but the frame served is
-            // whichever of it and the one read ahead is nearer. On a variable-rate
-            // source a floor repeats a frame whenever the next one starts a hair late.
             if let (Some((floor, _)), Some((next, Some(frame)))) = (&self.current, &self.held)
                 && nearer_than_floor(target, *floor, *next, self.demuxer.nominal_span)
             {
@@ -1023,17 +972,13 @@ mod tests {
     #[test]
     fn a_cut_between_frames_takes_the_nearest_one() {
         let span_60 = 1.0 / 60.0;
-        // 1/60 s against a frame that arrived at 17.2 ms instead of 16.7 ms.
         assert!(nearer_than_floor(1.0 / 60.0, 0.0, 0.0172, span_60));
         assert!(!nearer_than_floor(0.004, 0.0, 0.0172, span_60));
-        // Exactly halfway keeps the earlier frame.
         assert!(!nearer_than_floor(0.25, 0.0, 0.5, 0.5));
     }
 
     #[test]
     fn a_frame_across_a_variable_rate_gap_is_not_served_early() {
-        // Averaging 30 fps, frames at 3.0 s and 4.0 s: at 3.6 s the later one is nearer
-        // but 0.4 s away, far more than the jitter the nearest pick is for.
         let span_30 = 1.0 / 30.0;
         assert!(!nearer_than_floor(3.6, 3.0, 4.0, span_30));
         assert!(nearer_than_floor(3.99, 3.0, 4.0, span_30));
@@ -1041,7 +986,6 @@ mod tests {
 
     #[test]
     fn a_transport_stream_start_is_measured_from_its_first_timestamp() {
-        // 90 kHz clock starting 1.4 s in.
         let time_base = 1.0 / 90_000.0;
         let offset = stream_start_seconds(126_000, time_base);
         assert!((offset - 1.4).abs() < 1e-9);
@@ -1052,14 +996,11 @@ mod tests {
 
     #[test]
     fn video_and_audio_share_the_container_origin_and_keep_their_offset() {
-        // An M2TS recording: audio starts at 1.4000 s, video at 1.4667 s after B-frame
-        // reordering, and the container's start is the earlier of the two.
         let origin = media_origin_seconds(1_400_000, 0.0);
         assert!((origin - 1.4).abs() < 1e-9);
         let time_base = 1.0 / 90_000.0;
         let video = frame_seconds(132_003, 132_003, time_base, origin, None, 0.04);
         let audio = super::super::audio::stamp_seconds(126_000, 126_000, time_base, origin);
-        // Both measured from 1.4 s, so the picture still starts 67 ms after the sound.
         assert_eq!(
             audio.map(|audio| audio.abs() < 1e-9),
             Some(true),

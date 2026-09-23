@@ -242,9 +242,6 @@ fn lookup(locale: &str, key: &str) -> String {
         .unwrap_or_else(|| key.to_string())
 }
 
-/// Single left-to-right pass: substituted values are never re-scanned, so a value
-/// that itself contains `{count}` (a file name, user text) is inserted verbatim
-/// instead of being expanded by a later argument. Unknown placeholders stay as-is.
 fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
     let mut result = String::with_capacity(template.len());
     let mut rest = template;
@@ -255,8 +252,6 @@ fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
         };
         result.push_str(&rest[..open]);
         let name = &after_open[..close];
-        // A nested `{` means this brace is not the start of a placeholder; emit it and
-        // resume scanning from the next one.
         if name.contains('{') {
             result.push('{');
             rest = after_open;

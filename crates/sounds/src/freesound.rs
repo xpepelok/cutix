@@ -28,9 +28,6 @@ fn encode(value: &str) -> String {
     encoded
 }
 
-/// Whether `url` is Freesound's `download` endpoint — the original file, which only an
-/// OAuth2 session may fetch. Results parsed before the preview became the download
-/// carried it, and the saved-sounds file keeps such results as they were.
 pub(crate) fn is_oauth_download_url(url: &str) -> bool {
     let url = url.trim();
     url.contains("freesound.org/apiv2/sounds/") && url.trim_end_matches('/').ends_with("/download")
@@ -109,9 +106,6 @@ fn effect_from_result(result: &Value) -> Option<SoundResult> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
-        // Freesound's `download` endpoint (the original file) requires OAuth2 and
-        // answers 401 to token-authenticated requests, so the HQ preview is the best
-        // file we can actually fetch.
         download_url: preview_url.clone(),
         preview_url,
         duration: result

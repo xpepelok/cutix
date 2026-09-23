@@ -1,8 +1,3 @@
-//! `Editor`: every mutation the user can make to a timeline, as a method.
-//!
-//! Each one takes a snapshot for the undo stack before it changes anything, so a
-//! command that fails partway cannot leave a state the history cannot describe.
-
 use super::*;
 
 pub struct Editor<'a> {
@@ -16,8 +11,6 @@ pub struct Editor<'a> {
 }
 
 impl<'a> Editor<'a> {
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn restore_reverse(&mut self, element_id: &str) -> bool {
         self.mutate("reverse", element_id, move |element| {
@@ -35,8 +28,6 @@ impl<'a> Editor<'a> {
         })
     }
 
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn reverse_element(
         &mut self,
@@ -69,10 +60,6 @@ impl<'a> Editor<'a> {
         self.project.scenes.iter_mut().find(|scene| scene.id == id)
     }
 
-    /// Runs `edit` against the scene's tracks, taking an undo snapshot first.
-    ///
-    /// Open to the rest of the editor: `captions` builds its own multi-step commands out
-    /// of this rather than repeating the snapshot bookkeeping.
     pub(crate) fn commit<F>(&mut self, label: &'static str, edit: F) -> bool
     where
         F: FnOnce(&mut SceneTracks, &mut Vec<String>) -> bool,
@@ -424,8 +411,6 @@ impl<'a> Editor<'a> {
         self.commit("split", move |tracks, selection| {
             let mut created = Vec::new();
             let mut dropped: Vec<String> = Vec::new();
-            // Keeping only the left part creates and drops nothing, yet it is still an
-            // edit: the clip got shorter. Without tracking it the commit was refused.
             let mut trimmed: Vec<String> = Vec::new();
             for track in tracks_mut(tracks) {
                 let mut additions = Vec::new();

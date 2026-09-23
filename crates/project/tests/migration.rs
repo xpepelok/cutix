@@ -259,7 +259,6 @@ fn migrates_rich_v2_document_with_web_semantics() {
     assert!(mask["params"].get("position").is_none());
 
     assert_eq!(element["transition"]["easing"].as_str(), Some("easeInOut"));
-    // 0.5 s in the v2 fixture must survive the v23 seconds-to-ticks switch.
     assert_eq!(
         element["transition"]["duration"].as_f64(),
         Some(0.5 * TICKS_PER_SECOND)

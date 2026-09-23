@@ -14,8 +14,6 @@ fn ffmpeg_bin() -> Option<PathBuf> {
 fn use_ffmpeg() -> bool {
     match ffmpeg_bin() {
         Some(bin) => {
-            // Mutating the environment is unsound while another thread may be reading it.
-            // These tests run single-threaded against a variable only this test touches.
             unsafe { std::env::set_var(video::ffmpeg::DIR_ENV, &bin) };
             video::ffmpeg::can_encode()
         }

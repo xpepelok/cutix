@@ -15,8 +15,6 @@ fn agent(timeout: Duration) -> ureq::Agent {
 }
 
 pub fn get_json(url: &str, timeout: Duration) -> Result<Value, SoundsError> {
-    // A read timeout alone only bounds the gap between bytes, so a server trickling
-    // its answer could stall a search forever; the overall timeout caps the call.
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(timeout)
@@ -39,10 +37,6 @@ pub fn get_json(url: &str, timeout: Duration) -> Result<Value, SoundsError> {
     serde_json::from_str(&body).map_err(|error| SoundsError::Request(error.to_string()))
 }
 
-/// Downloads `url` into `directory`. The file name is `stem` plus a short hash of the
-/// URL: titles are not unique across providers (two different "Whoosh" effects), and
-/// a colliding name would overwrite audio that is already placed on the timeline.
-/// The same URL always maps to the same file, so a repeated download reuses it.
 pub fn download_audio(url: &str, directory: &Path, stem: &str) -> Result<PathBuf, SoundsError> {
     std::fs::create_dir_all(directory).map_err(|error| SoundsError::Request(error.to_string()))?;
 
@@ -52,9 +46,6 @@ pub fn download_audio(url: &str, directory: &Path, stem: &str) -> Result<PathBuf
         .call()
         .map_err(|error| SoundsError::Request(error.to_string()))?;
 
-    // A portal, a rate limiter or a restricted item answers 200 with a page. Written
-    // out as `.mp3` it would fail to decode, and — being a complete file — be handed
-    // back on every retry until the cache directory was cleared by hand.
     let content_type = response.header("Content-Type").unwrap_or_default();
     if is_text_content_type(content_type) {
         return Err(SoundsError::Request(format!(
@@ -65,10 +56,6 @@ pub fn download_audio(url: &str, directory: &Path, stem: &str) -> Result<PathBuf
     let extension = extension_for_content_type(content_type).unwrap_or("mp3");
 
     let target = directory.join(unique_file_name(stem, url, extension));
-    // Only complete downloads are ever renamed into place, so an existing target is
-    // whole — and it may be open by the timeline, so it must not be rewritten. The one
-    // exception is a page an earlier build cached under an audio name: nothing can be
-    // playing that, so it goes and the real file takes its place.
     if std::fs::metadata(&target).is_ok_and(|metadata| metadata.len() > 0) {
         if !file_looks_like_a_page(&target) {
             return Ok(target);
@@ -93,8 +80,6 @@ fn write_body(reader: impl Read, path: &Path, max_bytes: u64) -> Result<(), Soun
     let mut file =
         std::fs::File::create(path).map_err(|error| SoundsError::Request(error.to_string()))?;
 
-    // One byte past the cap is read so an oversized body is reported instead of
-    // being silently cut into a truncated, possibly undecodable file.
     let mut reader = reader.take(max_bytes + 1);
     let mut buffer = [0u8; 64 * 1024];
     let mut written: u64 = 0;
@@ -131,16 +116,12 @@ fn unique_file_name(stem: &str, url: &str, extension: &str) -> String {
     format!("{stem}-{:08x}.{extension}", url_hash(url) as u32)
 }
 
-/// FNV-1a: stable across Rust releases (unlike `DefaultHasher`), so the same URL
-/// keeps resolving to the same cached file between runs.
 fn url_hash(url: &str) -> u64 {
     url.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
-/// The media type without its parameters, lower-cased: `text/html; charset=utf-8`
-/// becomes `text/html`.
 fn mime_of(value: &str) -> String {
     value
         .split(';')
@@ -150,14 +131,10 @@ fn mime_of(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// No audio container is served as `text/*`; a body labelled so is an error page,
-/// a sign-in form or a captive portal.
 fn is_text_content_type(value: &str) -> bool {
     mime_of(value).starts_with("text/")
 }
 
-/// Whether the file's first bytes are markup. Every audio container starts with a
-/// magic number (`ID3`, `OggS`, `RIFF`, `fLaC`, an MP4 box size), never with `<`.
 fn looks_like_a_page(head: &[u8]) -> bool {
     let head = head.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(head);
     head.iter()
@@ -303,8 +280,6 @@ mod tests {
         assert!(!looks_like_a_page(b"   "));
     }
 
-    /// Answers one request per entry of `responses` on a fresh loopback port, in order,
-    /// then goes away.
     fn serve(responses: Vec<(&'static str, &'static [u8])>) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();

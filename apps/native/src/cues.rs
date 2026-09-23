@@ -125,15 +125,6 @@ thread_local! {
     };
 }
 
-/// Plays a short interface sound.
-///
-/// Does nothing under test: a cue is feedback for someone watching the screen, and opening
-/// the output device to produce one means initialising the platform audio stack from
-/// whatever thread the harness happens to be on. `render` and `interleave` are what the
-/// tests here exercise instead.
-///
-/// Never blocks the caller waiting for the player: a cue that cannot be played is skipped,
-/// because a sound is not worth stalling the interface for.
 pub fn play(cue: Cue) {
     if cfg!(test) {
         return;
@@ -149,8 +140,6 @@ pub fn play(cue: Cue) {
 mod tests {
     use super::*;
 
-    /// A nominal device rate to render cues at. The tests that care about rate
-    /// scaling name their own rates instead.
     const SAMPLE_RATE: u32 = 48_000;
 
     #[test]

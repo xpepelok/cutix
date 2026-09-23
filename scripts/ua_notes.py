@@ -11,7 +11,6 @@ ITEM = re.compile(
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
 
-
 def target_path(source, base):
     rel = os.path.relpath(source, base).replace("\\", "/")
     if rel.startswith("crates/"):
@@ -22,7 +21,6 @@ def target_path(source, base):
             return "apps/native/src/" + rest
         return "apps/web/src/" + rest
     return rel
-
 
 def notes_for(path):
     with io.open(path, encoding="utf-8", errors="replace") as handle:
@@ -46,7 +44,6 @@ def notes_for(path):
             buffer = []
     return collected
 
-
 def main():
     base = sys.argv[1]
     out = {}
@@ -64,6 +61,5 @@ def main():
     with io.open(target, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(out, handle, ensure_ascii=False, indent=1)
     print(len(out), "files", sum(len(item) for file in out.values() for item in file.values()), "notes")
-
 
 main()

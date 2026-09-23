@@ -54,8 +54,6 @@ struct FfmpegMp4Backend {
     sink: Mp4Sink,
     spec: VideoSpec,
     encoder: H264Encoder,
-    /// True once the encoder has been drained. It holds back a few dozen frames of
-    /// lookahead, and the sink needs every video sample before the audio track goes in.
     flushed: bool,
     y: Vec<u8>,
     u: Vec<u8>,
@@ -136,9 +134,6 @@ impl EncoderBackend for FfmpegMp4Backend {
     }
 
     fn push_audio(&mut self, audio: &AudioBuffer) -> Result<()> {
-        // Audio arrives after the last frame. An export shorter than the encoder's
-        // lookahead (about 40 frames for libx264) has produced no packets yet, so without
-        // draining first the sink has no video track and refuses the audio as empty.
         if !audio.interleaved.is_empty() {
             self.flush_encoder()?;
         }
@@ -152,7 +147,6 @@ impl EncoderBackend for FfmpegMp4Backend {
 }
 
 impl FfmpegMp4Backend {
-    /// Drains the encoder into the sink, once. Frames pushed after this are not encoded.
     fn flush_encoder(&mut self) -> Result<()> {
         if self.flushed {
             return Ok(());
@@ -182,8 +176,6 @@ mod tests {
         }
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("short.mp4");
-        // 320x240 like the other export tests: the chosen encoder is often a hardware
-        // one, and NVENC refuses rasters below about 145x49.
         let (width, height) = (320u32, 240u32);
         let spec = VideoSpec {
             width,
@@ -198,8 +190,6 @@ mod tests {
             backend.push_frame(&frame).expect("frame");
         }
         if backend.sink.frames() > 0 {
-            // A low-latency encoder (hardware, or no lookahead) has already emitted
-            // packets, so the branch this test is about cannot be reached here.
             eprintln!(
                 "SKIPPED: {} emitted packets before the audio",
                 chosen_encoder().unwrap_or("the encoder")

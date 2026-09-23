@@ -116,12 +116,6 @@ pub fn wait_for_channel(connection: &mut Connection, page: &Page) -> Result<Stri
     }
 }
 
-/// The Studio page of one particular channel.
-///
-/// Opening it is how Studio is asked to switch to that channel: a Google account that
-/// manages several (a personal channel and brand channels) lands on its default one at
-/// the bare Studio address. Anything but the characters a channel id is made of is
-/// dropped, so a stored id cannot steer the browser anywhere else.
 pub fn channel_studio_url(account_id: &str) -> String {
     let safe: String = account_id
         .chars()
@@ -132,15 +126,8 @@ pub fn channel_studio_url(account_id: &str) -> String {
     format!("https://studio.youtube.com/channel/{safe}?hl=en&persist_hl=1")
 }
 
-/// How long Studio gets to move off a channel page this account may not open.
 const CHANNEL_SETTLE: Duration = Duration::from_secs(3);
 
-/// Opens `url` and reports the channel Studio settles on.
-///
-/// Unlike [`wait_for_channel`], the address asked for already names a channel, so seeing
-/// `/channel/` in it proves nothing. The wait is for the page to finish loading, then a
-/// pause for Studio's own redirect away from a channel this Google account cannot
-/// manage; the id is read from wherever it is after that.
 pub fn wait_for_channel_at(
     connection: &mut Connection,
     page: &Page,

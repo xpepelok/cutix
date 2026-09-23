@@ -96,23 +96,11 @@ impl ExportQuality {
         }
     }
 
-    /// The target bitrate in bits per second for a backend whose rate control uses one.
-    ///
-    /// Only meaningful for encoders that actually implement bitrate targeting. OpenH264
-    /// cannot hold a bitrate without being allowed to drop frames, which an export must
-    /// never do, so it uses [`ExportQuality::quantiser`] instead.
     pub fn bitrate_bps(self, width: u32, height: u32, fps: f64) -> u32 {
         let pixels = (width as f64) * (height as f64) * fps.max(1.0);
         (pixels * self.bits_per_pixel()).clamp(200_000.0, 120_000_000.0) as u32
     }
 
-    /// The H.264 quantiser this quality pins the encoder to.
-    ///
-    /// A lower quantiser keeps more detail and produces a larger file. Encoders that
-    /// cannot target a bitrate without dropping frames are given this instead, as a fixed
-    /// value rather than a range: left a range to choose within, rate control reintroduces
-    /// the bitrate targeting the setting exists to avoid, and a higher quality can end up
-    /// smaller than a lower one. Valid H.264 quantisers run from 0 to 51.
     pub fn quantiser(self) -> u8 {
         match self {
             Self::Low => 38,

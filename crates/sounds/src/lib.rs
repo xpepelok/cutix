@@ -86,12 +86,6 @@ impl SoundResult {
         self.preview_url.as_deref().or(self.download_url.as_deref())
     }
 
-    /// Swaps a Freesound download URL that needs OAuth2 for the preview, which is what
-    /// a fresh search would carry now. Returns whether anything changed.
-    ///
-    /// Saved sounds are stored whole, so a result saved by an earlier build keeps the
-    /// `download` endpoint that answers 401 without OAuth — and would keep failing on
-    /// every "add to timeline" until it was un-saved and found again.
     pub fn repair_download_url(&mut self) -> bool {
         let stale = self
             .download_url

@@ -1,23 +1,10 @@
-//! Wall-clock time in the zone the person (and Studio) reads it in.
-//!
-//! Everything this crate stores is a true instant — unix seconds, or the UTC stamp
-//! `iso_timestamp` writes. What a person picks in a calendar, and what Studio's schedule
-//! picker takes, is a reading of the local clock instead. [`Zone`] converts between the
-//! two, and lets a test pin the offset rather than depend on the machine it runs on.
-
-/// Which clock a wall-clock reading belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Zone {
-    /// The machine's own time zone, daylight saving included. The browser Studio runs in
-    /// is started on this machine, so this is also the zone Studio interprets a typed
-    /// date and time in.
     Local,
-    /// A fixed offset east of UTC, in seconds. For tests, and for nothing else.
     Fixed(i64),
 }
 
 impl Zone {
-    /// Seconds east of UTC in effect at the instant `unix`.
     pub fn offset_at(self, unix: i64) -> i64 {
         match self {
             Self::Local => local_offset_at(unix),
@@ -25,20 +12,10 @@ impl Zone {
         }
     }
 
-    /// The reading this zone's clock shows at `unix`, expressed as the unix seconds a UTC
-    /// clock showing the same digits would have. Feed it to `civil_from_unix` for the
-    /// calendar fields.
     pub fn wall_clock(self, unix: i64) -> i64 {
         unix + self.offset_at(unix)
     }
 
-    /// The instant a reading of this zone's clock names. The inverse of [`wall_clock`].
-    ///
-    /// The offset depends on the instant, which is what is being solved for, so it is
-    /// asked for twice: once at a first guess, then at the instant that guess gives. That
-    /// lands on the right side of a daylight-saving change for every reading that exists.
-    ///
-    /// [`wall_clock`]: Zone::wall_clock
     pub fn instant(self, wall: i64) -> i64 {
         let guess = wall - self.offset_at(wall);
         wall - self.offset_at(guess)
@@ -54,7 +31,6 @@ fn local_offset_at(unix: i64) -> i64 {
     };
 
     let (year, month, day) = crate::civil_from_unix(unix);
-    // SYSTEMTIME cannot name anything outside these years.
     if !(1601..=30827).contains(&year) {
         return 0;
     }
@@ -71,11 +47,6 @@ fn local_offset_at(unix: i64) -> i64 {
     };
     let mut local = SYSTEMTIME::default();
 
-    // The dynamic flavour, because it carries the zone's rules for every year rather than
-    // only the current one — a schedule months out can cross a change in them.
-    //
-    // SAFETY: both structs are plain data the calls fill in; a zeroed zone record is a
-    // valid (empty) one and is overwritten before it is read.
     let converted = unsafe {
         let mut zone: DYNAMIC_TIME_ZONE_INFORMATION = std::mem::zeroed();
         GetDynamicTimeZoneInformation(&mut zone) != TIME_ZONE_ID_INVALID
@@ -98,8 +69,6 @@ fn local_offset_at(unix: i64) -> i64 {
 #[cfg(unix)]
 fn local_offset_at(unix: i64) -> i64 {
     let time = unix as libc::time_t;
-    // SAFETY: `tm` is plain data that `localtime_r` fills in; the zeroed value is only
-    // read when the call reports success.
     unsafe {
         let mut parts: libc::tm = std::mem::zeroed();
         if libc::localtime_r(&time, &mut parts).is_null() {
@@ -143,9 +112,6 @@ mod tests {
 
     #[test]
     fn the_local_zone_round_trips_an_instant_through_its_own_clock() {
-        // Whatever zone the machine running this is in, reading its clock and asking
-        // which instant that reading names must land back where it started. Mid-day in
-        // September is well clear of every daylight-saving change.
         let instant = crate::unix_from_civil(2026, 9, 23, 12, 0);
         let wall = Zone::Local.wall_clock(instant);
         assert_eq!(Zone::Local.instant(wall), instant);

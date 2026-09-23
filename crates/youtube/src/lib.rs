@@ -1,9 +1,4 @@
 pub mod accounts;
-/// The Chrome DevTools client the browser automation runs on.
-///
-/// Public because driving a page directly is how the probe examples and any
-/// future diagnostic tooling work; the selectors and login flows built on top of
-/// it stay internal.
 pub mod cdp;
 pub mod chrome;
 pub mod clock;
@@ -13,10 +8,6 @@ pub mod history;
 mod login;
 pub mod publish;
 pub mod queue;
-/// The page selectors and probes the studio automation matches against.
-///
-/// Public because the probe examples exist to check these against the live site when
-/// YouTube changes its markup, which is the only warning we get before uploads break.
 pub mod selectors;
 pub mod session;
 pub mod studio;
@@ -77,8 +68,6 @@ pub fn iso_timestamp(seconds: i64) -> String {
     )
 }
 
-/// The unix seconds of a calendar date and time read on a UTC clock. The inverse of
-/// [`civil_from_unix`]; an hour or minute past its range is clamped rather than carried.
 pub fn unix_from_civil(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
     let year = year as i64;
     let month = month as i64;
@@ -96,8 +85,6 @@ pub fn unix_from_civil(year: i32, month: u32, day: u32, hour: u32, minute: u32) 
     days * 86_400 + hour.min(23) as i64 * 3_600 + minute.min(59) as i64 * 60
 }
 
-/// The unix seconds of a stamp in the shape [`iso_timestamp`] writes, or `None` for
-/// anything else — a day the month does not have included.
 pub fn unix_from_iso(stamp: &str) -> Option<i64> {
     if !publish::is_rfc3339_utc(stamp) {
         return None;
@@ -111,17 +98,9 @@ pub fn unix_from_iso(stamp: &str) -> Option<i64> {
         number(11, 13)?,
         number(14, 16)?,
     ) + i64::from(number(17, 19)?);
-    // The 29th of February in a common year would otherwise quietly become the 1st of
-    // March; writing the result back out and comparing catches it.
     (iso_timestamp(seconds) == stamp).then_some(seconds)
 }
 
-/// The UTC stamp of a legacy schedule: one whose digits are a reading of the clock in
-/// `zone` although it ends in `Z`. Builds before the zone-aware picker wrote the picked
-/// digits straight out with a `Z`, and typed the same digits into Studio unchanged; now
-/// that a stamp is read as the instant it names, those digits have to be moved onto the
-/// instant first or the video lands a whole UTC offset off. `None` for a stamp that is
-/// not in the shape [`iso_timestamp`] writes.
 pub fn utc_stamp_of_local_digits(stamp: &str, zone: clock::Zone) -> Option<String> {
     let wall = unix_from_iso(stamp.trim())?;
     Some(iso_timestamp(zone.instant(wall)))

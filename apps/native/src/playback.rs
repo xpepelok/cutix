@@ -23,18 +23,13 @@ fn describe_playback_error(error: &PlaybackError, media_assets: &[MediaAssetData
     }
 }
 
-/// Why a layer was left out of a composed frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DroppedLayer {
     pub media_id: String,
-    /// The file exists but could not be decoded, as opposed to being missing.
     pub undecodable: bool,
 }
 
 impl DroppedLayer {
-    /// Reads the first media layer the compositor reported skipping. Other skipped
-    /// reasons (effects without a GPU pass, unsupported stickers) are not the user's
-    /// problem to fix and stay quiet.
     pub fn from_skipped(skipped: &[String]) -> Option<Self> {
         skipped.iter().find_map(|reason| {
             if let Some(id) = reason.strip_prefix("media-missing:") {
@@ -110,9 +105,6 @@ struct AudioBridge {
     commands: Sender<AudioCommand>,
     warning: Arc<Mutex<Option<String>>>,
     clock: Arc<AudioClock>,
-    /// Held so the bridge can wait for the worker in `Drop`. A detached worker outlives
-    /// the bridge that owns it and keeps touching the audio device while the process is
-    /// being torn down, which on Windows ends the process rather than the thread.
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -271,9 +263,6 @@ impl AudioBridge {
 impl Drop for AudioBridge {
     fn drop(&mut self) {
         let _ = self.commands.send(AudioCommand::Stop);
-        // Waited for, not just asked to stop. Swapping projects drops one bridge and
-        // spawns the next, so without this the old worker is still holding the output
-        // device when the new one opens it, and still running when the process exits.
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -287,11 +276,6 @@ fn store_warning(slot: &Arc<Mutex<Option<String>>>, message: String) {
     }
 }
 
-/// Everything about a running frame stream that, if it changes, makes the stream wrong.
-///
-/// Comparing the whole key each tick is what ties the preview to the controller's
-/// cancellation contract: a seek, a project swap or an audio clock correction advances the
-/// generation, the key stops matching, and the stream is rebuilt from the corrected clock.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct StreamKey {
     width: u32,
@@ -312,17 +296,10 @@ pub struct PreviewEngine {
     image_time: MediaTime,
     image_revision: u64,
     pub error: Option<String>,
-    /// A layer the last frame had to leave out because its media file is gone or
-    /// would not decode. The picture still shows, so this is a caption, not an error.
     pub dropped: Option<DroppedLayer>,
     pending: bool,
 
     requested: Option<(i64, u32, u32)>,
-    /// The stream currently running, keyed by everything that would invalidate it: the
-    /// output size, the frame duration and the playback generation it was started in.
-    /// When the controller advances its generation — a seek, a project swap, an audio
-    /// clock correction — this no longer matches and the stream is restarted from the
-    /// corrected clock position.
     streaming: Option<StreamKey>,
     audio_starvations: std::cell::Cell<u64>,
     volume: f32,
@@ -373,14 +350,6 @@ impl Default for PreviewEngine {
 }
 
 impl PreviewEngine {
-    /// Starts the preview for `project` and hands back the image the previous one left on
-    /// screen, for the caller to release through its context.
-    ///
-    /// Acquires nothing under test. Opening a preview builds a GPU device and an audio
-    /// output from whatever thread the harness happens to be on, and the tests that reach
-    /// this — opening a project, switching between two — are about the document and its
-    /// autosave rather than about the picture. Skipping it leaves the engine reporting
-    /// itself closed, which is what a machine with neither device reports anyway.
     pub fn open(
         &mut self,
         project: &Project,
@@ -394,14 +363,9 @@ impl PreviewEngine {
         self.thumbnail = None;
         self.thumbnail_taken = None;
 
-        // Released before the replacements are acquired. Assigning over the fields builds
-        // the new worker first, which leaves the old one holding a GPU device and the
-        // audio output while the new one asks for both.
         self.controller = None;
         self.audio = None;
         self.error = None;
-        // The caption belongs to the last project's frame; the new project's media
-        // has different ids, so a stale one would name a file it never had.
         self.dropped = None;
 
         if !cfg!(test) {
@@ -564,8 +528,6 @@ impl PreviewEngine {
         let Some(controller) = self.controller.as_ref() else {
             return;
         };
-        // Seeking ends the controller's current generation, which drops every queued and
-        // in-flight frame composed for the old playhead position.
         controller.seek(time);
         if let Some(audio) = self.audio.as_ref() {
             audio.send(if controller.is_playing() {
@@ -590,9 +552,6 @@ impl PreviewEngine {
         }
         self.reconcile_audio_clock(controller);
 
-        // Every valid rate has an exact frame duration. A rate that has none is not a
-        // rate at all, and there is no honest frame length to substitute for it, so the
-        // preview holds its last picture rather than racing through the timeline.
         let frame = rate.frame_duration()?;
         let playing = controller.is_playing();
         let clock = controller.current_time();
@@ -681,12 +640,6 @@ impl PreviewEngine {
         if drift.abs() < AV_SYNC_TOLERANCE_TICKS || drift.abs() > AV_SYNC_MAX_DRIFT_TICKS {
             return;
         }
-        // Corrected through `retime`, not `seek`: the queued frames carry their own
-        // timeline times and stay valid across a clock correction, and the stream key in
-        // `tick` keeps matching so the stream runs on. Correcting through `seek` would
-        // discard the pipeline every time the clock drifted, and drift past the tolerance
-        // is the normal state of an audio device running a second of lead — the picture
-        // would sit still while the sound played on.
         controller.retime(audio);
     }
 }

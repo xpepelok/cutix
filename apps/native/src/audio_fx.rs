@@ -35,8 +35,6 @@ pub enum Effect {
 }
 
 impl Effect {
-    /// Only the tests in this file ask this; compiled for them alone so the shipping
-    /// binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn tail_seconds(&self, sample_rate: u32) -> f64 {
         match self {

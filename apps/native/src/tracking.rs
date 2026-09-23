@@ -311,8 +311,6 @@ mod tests {
         }
     }
 
-    /// The sizes a placement is worked out against: the source frame and the canvas it
-    /// is being laid onto.
     #[derive(Clone, Copy)]
     struct Frames {
         source_width: f64,

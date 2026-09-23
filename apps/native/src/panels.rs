@@ -247,8 +247,6 @@ fn caption_style_label(id: &str) -> String {
 }
 
 pub const SETTINGS_MODAL_WIDTH_PX: f32 = 560.0;
-/// The settings card keeps one height for every tab: sized to its content, the
-/// centred card would jump under the pointer each time a taller or shorter tab opens.
 pub const SETTINGS_MODAL_HEIGHT_PX: f32 = 640.0;
 
 pub const MISC_TABS: &[(&str, &str)] = &[
@@ -320,14 +318,10 @@ pub struct AssetsPanel {
     rasterizer: Option<cutix_playback::TextRasterizer>,
 }
 
-/// One watermark setting shown as a labelled slider with preset pills beside it.
 struct WatermarkScaleRow<'label> {
     label: &'label str,
-    /// Stable element id, so the row keeps its hover and focus state across redraws.
     id: &'static str,
-    /// The value the setting holds right now.
     current: f64,
-    /// The quick-pick values, each with the text on its pill.
     presets: &'static [(f64, &'static str)],
 }
 
@@ -3214,7 +3208,6 @@ impl AssetsPanel {
         (480.0, (140.0 + notice + list.min(430.0)).round())
     }
 
-    /// Whether a queued upload is waiting its turn or being worked on.
     fn upload_waiting(&self) -> bool {
         self.youtube
             .queue
@@ -3223,8 +3216,6 @@ impl AssetsPanel {
             .any(|task| task.state.is_active())
     }
 
-    /// Tells the render helpers what is in flight, for the parts of the app that
-    /// cannot see this panel: the window's close button and the update pill.
     fn publish_activity_flags(&self) {
         crate::youtube_ui::render::set_uploading(
             self.upload_waiting() || !self.youtube.running.is_empty(),
@@ -3335,7 +3326,6 @@ impl AssetsPanel {
             .w_full()
             .child(
                 div()
-                    // Same inset as the section title and hint around it.
                     .px(px(4.0))
                     .text_size(rem(TEXT_XS))
                     .text_color(colors.muted_foreground)
@@ -3458,7 +3448,6 @@ impl AssetsPanel {
             window,
             cx,
         );
-        // Switching tabs fades the new page in rather than snapping it.
         let body = crate::appear::fade(
             body,
             SharedString::from(format!("settings-page-{}", APP_SETTINGS_TABS[active].0)),
@@ -3539,9 +3528,6 @@ impl AssetsPanel {
         )
     }
 
-    /// Closes the topmost YouTube or settings window, as Escape does. Each closes the
-    /// same way its own Close button would — in publish-only mode a form that merely
-    /// vanished would leave a blank window that never asks to close.
     pub fn dismiss_youtube_overlays(&mut self) -> bool {
         let open = self.youtube.sign_in_form.is_some()
             || self.youtube.form.is_some()
@@ -3556,8 +3542,6 @@ impl AssetsPanel {
         open
     }
 
-    /// Drops the publish form and whatever led to it (a pending file, the account
-    /// picker), asking the publish-only window to close once nothing is running.
     fn dismiss_publish_form(&mut self) {
         self.youtube.should_close =
             self.youtube.running.is_empty() && self.youtube.session.is_empty();
@@ -3608,9 +3592,6 @@ impl AssetsPanel {
     }
 
     fn refresh_youtube_statuses(&mut self, _cx: &mut Context<Self>) {
-        // The channel-details fetch is not released here: it releases itself when it
-        // finishes. Clearing it on every frame of the settings page let a new headless
-        // browser start on every frame, each one stopping the last on the same profile.
         self.youtube_refreshed = true;
     }
 
@@ -3781,8 +3762,6 @@ impl AssetsPanel {
     }
 
     fn ensure_channel_details(&mut self, cx: &mut Context<Self>) {
-        // Skips any account whose profile an upload or a sign-in has open: the headless
-        // browser would stop theirs on launch.
         let Some(id) = self.youtube.account_to_refresh() else {
             return;
         };
@@ -3802,8 +3781,6 @@ impl AssetsPanel {
                 if this.youtube.is_refreshing(&id) {
                     this.youtube.refreshing = None;
                 }
-                // Uploads held back while this profile was open can start now, whatever
-                // the fetch found.
                 this.pump_youtube_queue(cx);
                 let Ok(youtube::session::ChannelDecorations {
                     title,
@@ -3941,10 +3918,6 @@ impl AssetsPanel {
                             this.youtube.store_avatar(&id, &bytes);
                         }
 
-                        // The channel signed into is one an upload, a refresh or a
-                        // re-auth has open right now: adopting the scratch profile
-                        // would delete theirs from under the browser. The scratch
-                        // copy is dropped and the account stays as it was.
                         if this.youtube.profile_in_use(&id) {
                             let _ = std::fs::remove_dir_all(&profile);
                             this.youtube.sign_in_form = None;
@@ -3993,8 +3966,6 @@ impl AssetsPanel {
             return;
         }
 
-        // Refused while another re-authorisation is open, and while an upload or a
-        // refresh has this profile: the visible browser would stop theirs on launch.
         let cancel = match self.youtube.begin_reauth(account_id) {
             Ok(cancel) => cancel,
             Err(notice) => {
@@ -4020,20 +3991,15 @@ impl AssetsPanel {
             let _ = this.update(cx, |this, cx| {
                 this.youtube.end_reauth(&account_id);
                 match outcome {
-                    // A row removed while the window was open stays removed; merging
-                    // keeps the name and avatar the page did not get round to showing.
                     Ok((account, avatar)) => {
                         this.youtube
                             .reauthorised(account, avatar, youtube::now_unix());
                     }
-                    // The person closed it on purpose; there is nothing to report.
                     Err(failure) if failure.is_cancelled() => {}
                     Err(failure) => {
                         this.youtube.notice = Some(crate::youtube_ui::failure_message(&failure));
                     }
                 }
-                // Uploads held back while the profile was open go now: the ones put back
-                // in line start, and any for a session still dead are told to sign in.
                 this.pump_youtube_queue(cx);
                 cx.notify();
             });
@@ -4069,14 +4035,10 @@ impl AssetsPanel {
     }
 
     fn start_one_upload(&mut self, cx: &mut Context<Self>) -> bool {
-        // An account already known to be signed out gets no browser: each of its uploads
-        // would only open one to find the same dead session.
         if self.youtube.fail_stale_sessions() {
             self.youtube.save_queue();
             cx.notify();
         }
-        // Nor does a profile a sign-in or a refresh has open, since launching on it
-        // would stop theirs; those uploads wait for it to be released.
         let Some(task) = self.youtube.next_startable() else {
             return false;
         };
@@ -4142,8 +4104,6 @@ impl AssetsPanel {
         true
     }
 
-    /// Settles an upload that ended. `started` is the task as it was when its browser
-    /// was launched.
     fn finish_youtube_task(
         &mut self,
         started: youtube::Task,
@@ -4156,9 +4116,6 @@ impl AssetsPanel {
         self.youtube
             .running
             .retain(|running| running.task_id != task_id);
-        // The row can be gone by the time the browser finishes — removed while it ran,
-        // or pushed out of the stored queue. A video that did go up still gets its
-        // history entry and its announcement, from what the task was at launch.
         let task = self.youtube.queue.get(task_id).cloned().unwrap_or(started);
         let now = youtube::now_unix();
 
@@ -4262,10 +4219,6 @@ impl AssetsPanel {
                 let selected = index == active;
                 div()
                     .id(SharedString::from(format!("settings-tab-{id}")))
-                    // The highlight below is laid out as one equal share of the row,
-                    // so a tab may never grow past its share: without `min_w_0` a
-                    // flex item refuses to shrink below its label, and a long label
-                    // ("Infos du projet") would push the highlight off its tab.
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
@@ -4289,8 +4242,6 @@ impl AssetsPanel {
                     }))
             })
             .collect::<Vec<_>>();
-        // One highlight glides between the tabs instead of each tab lighting up on
-        // its own, keyed by the group's first tab so two strips never share a slide.
         let highlight = crate::appear::segment_highlight(
             group.first().map_or("settings-tabs", |(id, _)| *id),
             active,
@@ -4513,8 +4464,6 @@ impl AssetsPanel {
                         ),
                     )
                     .child(self.group_title(colors, t("settings.theme")))
-                    // Both themes side by side like the languages above, the current
-                    // one lit, rather than one stretched pill that reads as a field.
                     .child(
                         div().flex().flex_wrap().w_full().children(
                             [(true, "theme.dark"), (false, "theme.light")]
@@ -7841,10 +7790,6 @@ impl Render for PreviewPanel {
                         .children(tracking_box)
                         .children(snap)
                         .when_some(dropped, |this, message| {
-                            // The frame still shows, minus one layer: a caption in the
-                            // corner says which, without covering the picture. The
-                            // corner anchor sits on a wrapper: the toast rise repositions
-                            // the element it animates, which would undo `absolute`.
                             this.child(
                                 div()
                                     .absolute()
@@ -10820,15 +10765,11 @@ fn playhead(colors: Palette, x: f32) -> Div {
         )
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn zoom_from_slider(slider: f32) -> f32 {
     TIMELINE_ZOOM_MIN * (TIMELINE_ZOOM_MAX / TIMELINE_ZOOM_MIN).powf(slider.clamp(0.0, 1.0))
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn slider_from_zoom(zoom: f32) -> f32 {
     let zoom = zoom.clamp(TIMELINE_ZOOM_MIN, TIMELINE_ZOOM_MAX);

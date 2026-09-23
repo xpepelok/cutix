@@ -23,10 +23,6 @@ pub fn audio_sample_duration(sample_rate: u32) -> Option<u32> {
         .then(|| (numerator / denominator) as u32)
 }
 
-/// How audio will be delivered for an MP4 written by this sink.
-///
-/// Decided from the probed capabilities before the destination file is created, so the
-/// caller can tell the user what it is about to produce.
 pub fn audio_support() -> AudioSupport {
     match crate::capabilities::ExportCapabilities::probe().audio_strategy() {
         crate::capabilities::AudioStrategy::Aac => AudioSupport::Muxed,
@@ -46,7 +42,6 @@ pub struct Mp4Sink {
     destination: PathBuf,
     spec: VideoSpec,
     writer: Option<Mp4Writer<BufWriter<File>>>,
-    /// The video track's and the movie's timescale; see [`video_timescale`].
     video_timescale: u32,
     track_added: bool,
     frames: u64,
@@ -65,7 +60,6 @@ impl Mp4Sink {
                 height: spec.height,
             });
         }
-        // A rate above the timescale would give some frames no duration at all.
         let rate = spec.frame_rate;
         if !rate.is_valid()
             || u64::from(rate.numerator) > TIMESCALE as u64 * u64::from(rate.denominator)
@@ -89,8 +83,6 @@ impl Mp4Sink {
                     str::parse("avc1").unwrap_or_default(),
                     str::parse("mp41").unwrap_or_default(),
                 ],
-                // The movie shares the video track's clock, so the video's durations carry
-                // over exactly, and the audio's 90 kHz ones scale by a whole factor.
                 timescale: video_timescale,
             },
         )
@@ -213,10 +205,6 @@ impl Mp4Sink {
             return self.write_sidecar(audio);
         }
 
-        // The capability probe answers for the AAC encoder specifically, but opening one
-        // for this particular sample rate and channel count can still fail. The video
-        // track is already on disk by now, so a failure here falls back to a sidecar WAV
-        // rather than throwing away a finished render.
         let track = match aac::encode(audio) {
             Ok(track) => track,
             Err(_) => return self.write_sidecar(audio),
@@ -374,18 +362,8 @@ pub(crate) fn patch_sl_config_predefined(path: &Path) -> Result<bool> {
     Ok(patched)
 }
 
-/// The largest multiple of [`TIMESCALE`] the video track is given. Enough for every
-/// NTSC rate (x2 at 59.94, x4 at 23.976); an odd rate that needs more keeps 90 kHz.
 const MAX_TIMESCALE_MULTIPLE: u64 = 16;
 
-/// The video track's timescale: the smallest multiple of [`TIMESCALE`] in which a frame
-/// lasts a whole number of units, so every frame has the same duration.
-///
-/// At 90 kHz a 59.94 fps frame is 1501.5 units and the durations alternate 1502, 1501,
-/// which the mp4 crate writes as one `stts` entry per frame; its reader then scans that
-/// table linearly for every sample, and re-importing an hour of such an export costs
-/// O(n^2). At 180 kHz the frame is a constant 3003 units and `stts` is a single entry.
-/// Audio stays at 90 kHz, which divides this exactly.
 fn video_timescale(rate: time::FrameRate) -> u32 {
     let numerator = u64::from(rate.numerator);
     let per_frame = u64::from(TIMESCALE) * u64::from(rate.denominator);
@@ -404,25 +382,14 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
     a
 }
 
-/// Where frame `index` starts on the video track, in units of `timescale`.
-///
-/// Computed from the exact rational rate for every frame instead of summing a per-frame
-/// duration rounded once, which drifts: adding 1502 at 90 kHz for 59.94 fps puts the
-/// picture a full second behind the audio after about fifty minutes. With the timescale
-/// from [`video_timescale`] every frame lasts the same; for a rate that fell back to
-/// 90 kHz the durations are the differences between successive starts, so they vary as
-/// needed and never accumulate error. The rate must be valid.
 fn frame_start(rate: time::FrameRate, index: u64, timescale: u32) -> u64 {
     let numerator = u128::from(rate.numerator);
     let scaled = u128::from(index) * u128::from(timescale) * u128::from(rate.denominator);
     ((scaled + numerator / 2) / numerator) as u64
 }
 
-/// The H.264 parameter sets carried by a bitstream: `(sequence set, picture set)`.
 type ParameterSets = (Vec<u8>, Vec<u8>);
 
-/// Splits an Annex B bitstream into its parameter sets, if it carries any, and the coded
-/// slices that follow them in length-prefixed form.
 fn split_annex_b(stream: &[u8]) -> (Option<ParameterSets>, Vec<u8>) {
     let mut sps = None;
     let mut pps = None;
@@ -516,7 +483,6 @@ mod tests {
     #[test]
     fn frame_starts_follow_the_exact_rate_without_drifting() {
         let rate = time::FrameRate::FPS_59_94;
-        // 60 000 frames at 59.94 fps last exactly 1001 seconds.
         assert_eq!(
             frame_start(rate, 60_000, TIMESCALE),
             1_001 * u64::from(TIMESCALE)
@@ -527,7 +493,6 @@ mod tests {
             })
             .collect();
         assert_eq!(durations, vec![1_502, 1_501, 1_502, 1_501]);
-        // Whole-unit rates keep their plain duration.
         assert_eq!(
             frame_start(time::FrameRate::FPS_30, 7, TIMESCALE),
             7 * 3_000
@@ -554,8 +519,6 @@ mod tests {
             ),
         ] {
             assert_eq!(video_timescale(rate), timescale, "{rate:?}");
-            // Every frame the same length, so `stts` collapses to one entry, and the
-            // audio's 90 kHz converts to the movie clock by a whole factor.
             for index in [0, 1, 2, 999, 215_999] {
                 let span =
                     frame_start(rate, index + 1, timescale) - frame_start(rate, index, timescale);
@@ -567,7 +530,6 @@ mod tests {
 
     #[test]
     fn a_rate_needing_a_huge_timescale_keeps_ninety_kilohertz() {
-        // 90 001 frames over 1000 s: whole-unit frames would need a 90 001x timescale.
         let rate = time::FrameRate {
             numerator: 90_001,
             denominator: 1_000,

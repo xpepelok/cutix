@@ -185,8 +185,6 @@ pub fn split_tokens(tokens: &[i64], maximum: usize) -> Vec<Vec<i64>> {
     chunks
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn unsupported_symbols(phonemes: &str) -> Vec<char> {
     let mut missing: Vec<char> = Vec::new();

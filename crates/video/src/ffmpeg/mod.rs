@@ -408,11 +408,6 @@ unsafe fn bind_encoder(avutil: &Library, avcodec: &Library) -> Result<EncoderApi
     }
 }
 
-/// Whether this FFmpeg build exposes the encoder entry points at all.
-///
-/// This is a necessary condition, not a sufficient one: a specific codec may still be
-/// missing. Callers that need a particular encoder must ask for it — see
-/// [`can_encode_aac`] and [`best_h264_encoder`].
 pub fn can_encode() -> bool {
     instance()
         .map(|ffmpeg| ffmpeg.encoder_api().is_some())

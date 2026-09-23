@@ -1,6 +1,4 @@
 fn disable_ffmpeg() {
-    // Mutating the environment is unsound while another thread may be reading it.
-    // These tests run single-threaded against a variable only this test touches.
     unsafe { std::env::set_var(video::ffmpeg::DISABLE_ENV, "1") };
 }
 

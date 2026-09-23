@@ -116,9 +116,6 @@ fn image_element(media_id: &str, patch: serde_json::Value) -> TimelineElement {
     serde_json::from_value(value).unwrap()
 }
 
-/// Written once per test binary: tests run in parallel, and rewriting the shared file
-/// under a test that is decoding it yields a truncated PNG, which now just drops the
-/// layer and blanks the frame.
 fn quadrant_png() -> PathBuf {
     static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
@@ -136,7 +133,6 @@ fn quadrant_png() -> PathBuf {
     .clone()
 }
 
-/// A file with a PNG name that no decoder accepts, written once per test binary.
 fn bogus_png() -> PathBuf {
     static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
@@ -164,7 +160,6 @@ fn a_lenient_composer_drops_a_missing_layer_where_a_strict_one_fails() {
         height: 8,
     };
 
-    // The preview default: the layer is dropped and reported, the frame still renders.
     let nothing = MediaMap::new();
     let frame = composer.compose(&request, &nothing).unwrap();
     assert!(
@@ -186,7 +181,6 @@ fn a_lenient_composer_drops_a_missing_layer_where_a_strict_one_fails() {
         frame.skipped
     );
 
-    // The export setting: the same two frames are errors that name the media.
     composer.set_strict_media(true);
     let error = composer.compose(&request, &nothing).unwrap_err();
     assert!(
@@ -196,7 +190,6 @@ fn a_lenient_composer_drops_a_missing_layer_where_a_strict_one_fails() {
     let error = composer.compose(&request, &undecodable).unwrap_err();
     assert!(!matches!(error, PlaybackError::MediaNotFound(_)), "{error}");
 
-    // And back: the composer is reusable for the preview afterwards.
     composer.set_strict_media(false);
     assert!(composer.compose(&request, &nothing).is_ok());
 }
@@ -217,8 +210,6 @@ fn missing_media_names_only_the_visible_layers_whose_files_are_gone() {
     assert!(missing_media(&project, None, &MediaMap::new()).contains(&"present".to_string()));
 }
 
-/// A video clip on the main track whose sound comes from `media_id`, with an optional
-/// linear crossfade of `transition_seconds` from the previous clip.
 fn crossfading_clip(
     id: &str,
     media_id: &str,
@@ -249,7 +240,6 @@ fn crossfading_clip(
     serde_json::from_value(value).unwrap()
 }
 
-/// Five seconds of a constant half-scale signal, written once per test binary.
 fn constant_wav(sample_rate: u32) -> PathBuf {
     static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
@@ -289,8 +279,6 @@ fn mixed_mono(project: &Project, media: &MediaMap, sample_rate: u32, duration: f
 fn an_incoming_clip_with_a_head_handle_crossfades_without_a_step_at_the_cut() {
     let sample_rate = 48_000u32;
     let media = MediaMap::new().with("tone", constant_wav(sample_rate));
-    // a covers 0-2 s, b covers 2-4 s with a 1 s crossfade; b is trimmed 1 s in, so it
-    // has a full head handle to play under the outgoing half of the window.
     let project = project_with(vec![
         crossfading_clip("a", "tone", 0.0, 2.0, 0.0, None),
         crossfading_clip("b", "tone", 2.0, 2.0, 1.0, Some(1.0)),
@@ -299,8 +287,6 @@ fn an_incoming_clip_with_a_head_handle_crossfades_without_a_step_at_the_cut() {
     let level = 16_384.0 / 32_768.0;
     let at = |seconds: f64| mixed[(seconds * sample_rate as f64).round() as usize];
 
-    // Two linear ramps over the same window sum to a constant; before the change b
-    // was silent until 2.0 s and the level sagged to half just before the cut.
     for probe in [1.4, 1.5, 1.75, 1.999, 2.0, 2.001, 2.25, 2.499, 2.6] {
         let measured = at(probe);
         assert!(
@@ -327,13 +313,10 @@ fn an_incoming_clip_without_a_head_handle_ramps_in_from_its_own_start() {
     let level = 16_384.0 / 32_768.0;
     let at = |seconds: f64| mixed[(seconds * sample_rate as f64).round() as usize];
 
-    // Nothing to play before 2.0 s: only a, fading over the whole window.
     assert!((at(1.75) - level * 0.75).abs() < 2e-3, "{}", at(1.75));
-    // At the cut b starts from silence rather than jumping in at half gain.
     assert!((at(2.0) - level * 0.5).abs() < 2e-3, "{}", at(2.0));
     let cut = sample_rate as usize * 2;
     assert!((mixed[cut] - mixed[cut - 1]).abs() < 1e-3);
-    // Its fade is rebased onto [2.0, 2.5]: halfway there it is at half gain.
     assert!(
         (at(2.25) - (level * 0.25 + level * 0.5)).abs() < 2e-3,
         "{}",
@@ -1656,7 +1639,6 @@ fn text_ink_is_centred_and_inside_the_canvas() {
     );
 }
 
-/// Written once per test binary, for the same reason as [`quadrant_png`].
 fn stripes_png() -> PathBuf {
     static PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     PATH.get_or_init(|| {
@@ -1948,7 +1930,6 @@ fn replacing_the_project_never_presents_a_frame_from_the_old_one() {
     controller.play();
     controller.stream_from(MediaTime::ZERO, 160, 90, frame);
 
-    // Let the worker get frames in flight for the original project.
     let started = std::time::Instant::now();
     while controller.latest_frame().is_none() && started.elapsed().as_secs_f64() < 20.0 {
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -1964,8 +1945,6 @@ fn replacing_the_project_never_presents_a_frame_from_the_old_one() {
     let second = controller.generation();
     assert_ne!(second, first, "replacing the project must end the old era");
 
-    // Every frame the worker was composing belongs to the previous project. None of them
-    // may reach the presenter, however long the worker takes to finish them.
     let watched = std::time::Instant::now();
     while watched.elapsed().as_secs_f64() < 1.0 {
         if let Some(slot) = controller.latest_frame() {
@@ -2004,7 +1983,6 @@ fn seeking_ends_the_era_so_frames_for_the_old_playhead_are_dropped() {
         "no frame to invalidate"
     );
 
-    // A deliberate jump, as pressing on the timeline makes.
     controller.seek(seconds(1.5));
     let forward = controller.generation();
     assert_ne!(forward, before, "seeking must end the old era");
@@ -2013,7 +1991,6 @@ fn seeking_ends_the_era_so_frames_for_the_old_playhead_are_dropped() {
         "the frame composed for the old playhead survived the seek"
     );
 
-    // And a backward correction.
     controller.seek(seconds(0.25));
     let backward = controller.generation();
     assert_ne!(backward, forward, "each seek ends its own era");
@@ -2031,7 +2008,6 @@ fn a_rate_whose_frame_is_not_whole_ticks_still_streams_at_the_right_speed() {
         return;
     };
 
-    // 23 fps snaps onto no broadcast rate and one frame is not a whole number of ticks.
     let rate = time::FrameRate::nearest(23.0).expect("a real rate");
     assert_eq!(rate.ticks_per_frame(), None);
     let frame = rate.frame_duration().expect("a valid rate has a duration");
@@ -2049,8 +2025,6 @@ fn a_rate_whose_frame_is_not_whole_ticks_still_streams_at_the_right_speed() {
     }
     assert!(seen.len() >= 2, "no frames: {:?}", controller.take_error());
 
-    // Consecutive frames must be about a twenty-third of a second apart. The old integer
-    // fallback produced a single tick here, which is where the runaway speed came from.
     let step = seen[1].as_ticks() - seen[0].as_ticks();
     let expected = TICKS_PER_SECOND / 23;
     assert!(
@@ -2059,10 +2033,6 @@ fn a_rate_whose_frame_is_not_whole_ticks_still_streams_at_the_right_speed() {
     );
 }
 
-/// The audio clock is corrected against the device continuously, and past the sync
-/// tolerance on any device carrying real lead. Correcting through `seek` would empty the
-/// pipeline each time, leaving nothing to present between corrections: sound plays on
-/// while the picture sits on whichever frame arrived first.
 #[test]
 fn correcting_the_clock_keeps_the_frames_already_composed() {
     let clip = fixtures::fixture_or_skip!(fixtures::SQUARE_CLIP);

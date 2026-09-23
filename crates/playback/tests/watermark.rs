@@ -12,10 +12,6 @@ fn seconds(value: f64) -> MediaTime {
     MediaTime::from_seconds_f64(value).unwrap()
 }
 
-/// Written once per test binary under a per-process name: the tests run in parallel,
-/// and rewriting a shared file under a test that is decoding it yields a truncated
-/// PNG (silently dropped as `media-decode`) or the other test's colour. The colour is
-/// part of the name so the green and black backgrounds never share a path.
 fn solid_png(slot: &'static OnceLock<PathBuf>, label: &str, rgba: [u8; 4]) -> PathBuf {
     slot.get_or_init(|| {
         let directory = std::env::temp_dir().join("cutix-playback-tests");

@@ -83,8 +83,6 @@ pub fn action_chip<V: Host>(
         }))
 }
 
-/// The buttons a YouTube dialog ends with: the same component, size and variants as
-/// the app's other dialogs, rather than chips the size of the category tags.
 fn footer_button<V: Host>(
     id: &'static str,
     colors: Palette,
@@ -141,7 +139,6 @@ pub fn heading(colors: Palette, text: String) -> Div {
         .child(text)
 }
 
-/// The title of a YouTube dialog, sized like every other dialog title in the app.
 fn dialog_title(colors: Palette, text: String) -> Div {
     div()
         .text_size(rems(TEXT_LG))
@@ -157,15 +154,11 @@ pub fn field_style(placeholder: String) -> FieldStyle {
     }
 }
 
-/// Everything about one text input except where its value lives.
 pub struct InputSpec<'field> {
-    /// Stable element id, so the field keeps focus and caret across redraws.
     pub id: SharedString,
-    /// The text and caret state to render.
     pub field: &'field TextField,
     pub colors: Palette,
     pub style: FieldStyle,
-    /// The action to dispatch when the field is submitted, if it submits at all.
     pub submit: Option<Action>,
 }
 
@@ -945,7 +938,6 @@ pub fn set_chromeless(value: bool) {
 static UPLOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIGNING_IN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Whether an upload is queued or running; refreshed by the panel on every draw.
 pub fn set_uploading(value: bool) {
     UPLOADING.store(value, std::sync::atomic::Ordering::Relaxed);
 }
@@ -954,22 +946,14 @@ pub fn uploading() -> bool {
     UPLOADING.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Whether a sign-in or re-authorisation has a browser open; refreshed like
-/// [`set_uploading`].
 pub fn set_signing_in(value: bool) {
     SIGNING_IN.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Whether restarting cutix now would cut a YouTube job short: an upload in flight
-/// or queued, or a browser open for a sign-in. Read by the titlebar's update pill,
-/// which cannot see the panel's state.
 pub fn busy() -> bool {
     uploading() || SIGNING_IN.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Closes the sign-in form, cancelling a sign-in that is still running. In publish-only
-/// mode the window has nothing left to show once the form is gone, so — unless an
-/// upload, a session summary or the account picker is still there — it asks to close.
 pub fn dismiss_sign_in(state: &mut Youtube) {
     if let Some(form) = state.sign_in_form.as_ref() {
         form.abandon();
@@ -1159,8 +1143,6 @@ pub fn account_row<V: Host>(
                         .text_color(colors.foreground)
                         .child(account.display_name()),
                 )
-                // An empty handle would still take a line and push the name above
-                // the avatar's centre.
                 .when(!account.handle.trim().is_empty(), |lines| {
                     lines.child(label(colors, account.handle.clone()))
                 }),
@@ -1437,7 +1419,6 @@ pub fn history_row<V: Host>(
                     colors,
                     format!(
                         "{} \u{00b7} {} \u{00b7} {}",
-                        // The local date, the same day the date filter picks by.
                         youtube::iso_date(Zone::Local.wall_clock(entry.uploaded_at)),
                         t(entry.privacy.message_key()),
                         t(entry.status.message_key())
@@ -1572,7 +1553,6 @@ pub fn history_filters<V: Host>(
         .children(filter_calendar(colors, filters, Edge::To, cx))
         .child(label(colors, t("youtube.history.accounts")))
         .child(div().flex().flex_wrap().gap(px(8.0)).children(boxes))
-        // In its own row so the column does not stretch it into a field-like bar.
         .child(div().flex().child(chip(
             "yt-history-clear",
             colors,
@@ -2737,7 +2717,6 @@ pub fn publish_dialog<V: Host>(
         ))
         .child(label(colors, t("youtube.publish.privacy")))
         .child(div().flex().gap(px(4.0)).children(privacies))
-        // In its own row so the column does not stretch it into a field-like bar.
         .child(div().flex().child(chip(
             SharedString::from("yt-form-more"),
             colors,

@@ -4,10 +4,6 @@ mod piper;
 mod ru;
 mod text;
 
-/// Turns Russian text into the phoneme string the synthesiser reads.
-///
-/// Exposed because the pronunciation is worth inspecting on its own; the rest of
-/// the Russian handling stays internal.
 pub use ru::phonemize as phonemize_russian;
 
 use std::path::Path;

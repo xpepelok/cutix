@@ -14,9 +14,6 @@ pub enum Failure {
 
     SignedOut,
 
-    /// A re-authorisation landed on a different channel than the account being fixed.
-    ///
-    /// Carries the channel that was actually signed in, so the message can name it.
     WrongChannel(String),
 
     Timeout(String),
@@ -28,10 +25,6 @@ pub enum Failure {
     Cancelled,
     Io(String),
 
-    /// The app went away while the upload was running.
-    ///
-    /// Studio may already hold the video, as a draft or published, so a retry is offered
-    /// but never made on the person's behalf.
     Interrupted,
 }
 
@@ -134,7 +127,6 @@ impl FailureNote {
         self.retryable || self.auth || self.cancelled
     }
 
-    /// The note an upload gets when the app went away while it was running.
     pub fn interrupted() -> Self {
         Failure::Interrupted.note()
     }

@@ -71,22 +71,16 @@ pub enum SlotKind {
     Text,
 }
 
-/// Why a template manifest could not be used.
 #[derive(Debug)]
 pub enum TemplateError {
-    /// The manifest declares a version this build does not know how to read.
     UnsupportedVersion(u32),
     EmptyName,
     NoSlots,
-    /// Two slots share an id, so a fill cannot say which one it means.
     DuplicateSlotId(String),
     InvalidCanvas,
     InvalidFps,
-    /// A slot starts before zero or has a non-positive duration.
     NegativeTiming(String),
-    /// A slot runs past the end of the template's own timeline.
     SlotOutsideTimeline(String),
-    /// The manifest is not readable as JSON, or does not have the shape of a template.
     Malformed(serde_json::Error),
 }
 
@@ -113,9 +107,6 @@ impl std::fmt::Display for TemplateError {
 }
 
 impl PartialEq for TemplateError {
-    /// Compares by what went wrong. Two malformed manifests are the same failure when
-    /// the parser said the same thing about them; `serde_json::Error` has no equality of
-    /// its own, and its message is the only part a caller can act on.
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::UnsupportedVersion(left), Self::UnsupportedVersion(right)) => left == right,
@@ -182,11 +173,6 @@ pub fn validate(manifest: &TemplateManifest) -> Result<(), TemplateError> {
     Ok(())
 }
 
-/// Reads a template manifest and checks it describes something usable.
-///
-/// Both failures — unreadable JSON and a manifest whose slots do not make sense — come
-/// back as [`TemplateError`], so a caller can tell a corrupt file from a valid file
-/// describing an impossible template.
 pub fn parse(raw: &str) -> Result<TemplateManifest, TemplateError> {
     let manifest: TemplateManifest = serde_json::from_str(raw)?;
     validate(&manifest)?;

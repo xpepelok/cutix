@@ -144,10 +144,6 @@ fn split_arrow(line: &str) -> Option<(&str, &str)> {
     Some((&line[..index], &line[index + 3..]))
 }
 
-/// Unifies line endings and empties lines that hold only whitespace.
-///
-/// Cue blocks are split on a blank line, and a separator line carrying stray spaces
-/// or tabs (common in hand-edited files) would otherwise glue two cues into one.
 pub(crate) fn normalize_cue_lines(input: &str) -> String {
     input
         .replace("\r\n", "\n")

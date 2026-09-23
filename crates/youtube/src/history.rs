@@ -6,9 +6,6 @@ use std::path::Path;
 pub const HISTORY_FILE: &str = "youtube-history.json";
 const MAX_ENTRIES: usize = 500;
 
-/// The shape of the stored history. A file without the field is from a build whose
-/// `scheduled_for` stamps were local digits with a `Z` on the end (see
-/// [`crate::utc_stamp_of_local_digits`]); from this format on they are UTC instants.
 const STAMPS_ARE_UTC: u32 = 1;
 const CURRENT_FORMAT: u32 = STAMPS_ARE_UTC;
 
@@ -148,7 +145,6 @@ impl HistoryFilter {
 pub struct History {
     #[serde(default)]
     pub entries: Vec<HistoryEntry>,
-    /// Missing from a file means format 0; a history made in memory is always current.
     #[serde(default)]
     format: u32,
 }
@@ -167,9 +163,6 @@ impl History {
         Self::load_in(directory, Zone::Local)
     }
 
-    /// Loads the stored history, reading any legacy schedule on the clock in `zone` —
-    /// the machine's own outside tests, since that is the clock those digits were
-    /// picked on.
     pub fn load_in(directory: &Path, zone: Zone) -> Self {
         let path = directory.join(HISTORY_FILE);
         let Ok(text) = std::fs::read_to_string(path) else {
@@ -181,7 +174,6 @@ impl History {
         history
     }
 
-    /// Brings a history written by an earlier build up to the current format.
     fn upgrade_format(&mut self, zone: Zone) {
         if self.format < STAMPS_ARE_UTC {
             for entry in &mut self.entries {
@@ -202,7 +194,6 @@ impl History {
         std::fs::write(directory.join(HISTORY_FILE), text)
     }
 
-    /// Newest upload first, which is the order the history is read in.
     fn sort(&mut self) {
         self.entries
             .sort_by_key(|entry| std::cmp::Reverse(entry.uploaded_at));

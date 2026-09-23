@@ -1,6 +1,3 @@
-//! The numeric fields of an element: which ones exist, where each lives in the
-//! document, and the range each is clamped to.
-
 use super::*;
 
 pub const MIN_TRANSFORM_SCALE: f64 = 0.01;

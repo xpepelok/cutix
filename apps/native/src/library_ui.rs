@@ -23,8 +23,6 @@ use crate::theme::{
 };
 
 const CARD_GUTTER_PX: f32 = 8.0;
-/// How long after the grid fills in that its rows still rise in: long enough for the
-/// capped stagger to finish.
 const LIBRARY_REVEAL_WINDOW: Duration = Duration::from_millis(900);
 const METADATA_BATCH: usize = 48;
 const RESCAN_NOTICE: Duration = Duration::from_millis(1_600);
@@ -380,13 +378,8 @@ pub struct LibraryView {
     metadata_busy: bool,
     visible: Vec<Entry>,
     visible_key: Option<(u64, usize, String, &'static str, bool, &'static str)>,
-    /// When the grid last filled in or was reordered, with a counter that keys the
-    /// entrance so a later reorder replays it. The grid is virtualised, so rows are
-    /// only wrapped in the entrance for a short window: past it, rows scrolled into
-    /// view just appear instead of rising in again.
     reveal: Option<(u64, std::time::Instant)>,
     reveals: u64,
-    /// The entrance the rows were wrapped in on the last frame, if any.
     wrapped: Option<u64>,
     revision: u64,
     rescanned_at: Option<Instant>,
@@ -860,8 +853,6 @@ impl LibraryView {
         if self.visible_key.as_ref() == Some(&key) {
             return;
         }
-        // A search narrowing the grid and a single delete stay still; filling an
-        // empty grid or changing its order is when the cards rise in.
         let reordered = self
             .visible_key
             .as_ref()
@@ -875,8 +866,6 @@ impl LibraryView {
             .cloned()
             .collect();
         library::arrange(&mut shown, self.sort, self.ascending);
-        // The grid cuts a new group wherever the label changes, so members of a group
-        // have to sit together or the same header shows up several times.
         match self.grouping {
             library::Grouping::None => {}
             library::Grouping::Folder => {
@@ -3667,10 +3656,6 @@ impl Render for LibraryView {
                 .reveal
                 .filter(|(_, at)| at.elapsed() < LIBRARY_REVEAL_WINDOW)
                 .map(|(generation, _)| generation);
-            // Wrapping the rows in an entrance, or unwrapping them, gives every card a
-            // new element id, and gpui forgets its hover with it: a card the pointer
-            // then leaves never hears so and stays lit, its preview still running.
-            // Forget ours too; the next pointer move lights the card really under it.
             if reveal != self.wrapped {
                 self.wrapped = reveal;
                 self.transitions

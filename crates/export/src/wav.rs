@@ -5,7 +5,6 @@ use cutix_playback::AudioBuffer;
 
 use crate::error::{ExportError, Result};
 
-/// Bytes in the canonical 16-bit PCM header written in front of the samples.
 const HEADER_BYTES: usize = 44;
 
 pub fn write_wav(path: &Path, audio: &AudioBuffer) -> Result<u64> {
@@ -35,12 +34,6 @@ pub fn write_wav(path: &Path, audio: &AudioBuffer) -> Result<u64> {
     Ok(bytes.len() as u64)
 }
 
-/// The RIFF header for `samples` interleaved 16-bit samples, or `None` when a size field
-/// would not fit.
-///
-/// RIFF stores every size as a `u32`, so a mix of more than about 4 GiB (roughly 6.2 hours
-/// of 48 kHz stereo) cannot be described. Casting would silently wrap the sizes and write a
-/// file that players read as a few seconds long, so the caller gets an error instead.
 fn header(channels: usize, sample_rate: u32, samples: usize) -> Option<[u8; HEADER_BYTES]> {
     let channels = u16::try_from(channels.max(1)).ok()?;
     let sample_rate = sample_rate.max(1);
@@ -106,8 +99,6 @@ mod tests {
 
     #[test]
     fn audio_too_long_for_32_bit_sizes_is_refused_rather_than_wrapped() {
-        // 2^31 samples is 4 GiB of 16-bit data: one sample more than the data size field
-        // can hold once the rest of the RIFF chunk is counted.
         assert!(header(2, 48_000, (u32::MAX as usize - 36) / 2).is_some());
         assert!(header(2, 48_000, 1 << 31).is_none());
         assert!(header(70_000, 48_000, 8).is_none());

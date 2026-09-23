@@ -75,11 +75,6 @@ pub fn even(value: u32) -> u32 {
     }
 }
 
-/// A borrowed RGBA image: the pixels and the width they are laid out at.
-///
-/// Rows are tightly packed, four bytes per pixel, so `width` is what turns an offset into
-/// a coordinate. Keeping the two together is what stops a caller pairing a buffer with
-/// somebody else's width.
 #[derive(Clone, Copy, Debug)]
 pub struct RgbaFrame<'pixels> {
     pub pixels: &'pixels [u8],
@@ -87,7 +82,6 @@ pub struct RgbaFrame<'pixels> {
     pub height: u32,
 }
 
-/// The same, borrowed for writing.
 #[derive(Debug)]
 pub struct RgbaFrameMut<'pixels> {
     pub pixels: &'pixels mut [u8],
@@ -95,12 +89,6 @@ pub struct RgbaFrameMut<'pixels> {
     pub height: u32,
 }
 
-/// Paints `source` onto `target` at `(offset_x, offset_y)`, filling the rest with black.
-///
-/// This is the letterbox blit: the composed frame is smaller than the output, so the
-/// margin around it has to be opaque rather than left as whatever the buffer held.
-/// A source that would overhang the target is clipped rather than wrapping onto the next
-/// row.
 pub fn blit_centre(source: RgbaFrame<'_>, target: RgbaFrameMut<'_>, offset_x: u32, offset_y: u32) {
     for pixel in target.pixels.as_chunks_mut::<4>().0 {
         pixel.copy_from_slice(&[0, 0, 0, 255]);

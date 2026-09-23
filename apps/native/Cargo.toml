@@ -1,12 +1,9 @@
 [package]
 name = "cutix"
-version = "0.0.2"
+version = "0.0.3"
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-# The GPUI views have not been moved to edition 2024 yet: its closure-capture and
-# temporary-lifetime rules reject a large amount of the view code, and rewriting that
-# belongs in its own change rather than riding along with a manifest cleanup.
 edition = "2021"
 
 [[bin]]

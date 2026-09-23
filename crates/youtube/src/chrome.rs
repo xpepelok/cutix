@@ -121,9 +121,6 @@ fn release_profile(profile: &Path) -> bool {
         let _ = std::fs::remove_file(&path);
     }
 
-    // Shadowed rather than mutated: off Windows there are no processes to stop and
-    // nothing reassigns this, so a `mut` here is a warning on every other platform.
-    // `|` rather than `||`, so the processes are stopped whether or not a lock file was.
     #[cfg(windows)]
     let freed = freed | stop_processes_on(profile);
 
@@ -136,13 +133,6 @@ fn hide_console(command: &mut Command) {
     command.creation_flags(0x0800_0000);
 }
 
-/// Lists every Chrome and Edge process with its command line, as CSV.
-///
-/// `wmic` used to do this, but Windows 11 24H2 dropped it, so this goes through CIM
-/// instead. The script holds no double quote — the filter is single-quoted with the
-/// inner quotes doubled — so nothing in it depends on how the argument is escaped on
-/// its way to PowerShell. Output is forced to UTF-8, or a profile under a user name
-/// outside the console code page would never match.
 #[cfg(windows)]
 const PROCESS_LISTING: &str = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; \
      Get-CimInstance Win32_Process -Filter 'Name=''chrome.exe'' OR Name=''msedge.exe''' | \
@@ -188,10 +178,6 @@ fn stop_processes_on(profile: &Path) -> bool {
     stopped
 }
 
-/// The `(ProcessId, CommandLine)` rows of `ConvertTo-Csv` output.
-///
-/// Every field is quoted and a quote inside one is doubled, which Chrome's own command
-/// lines are full of. The header row and any row without a numeric id are skipped.
 pub fn parse_process_listing(text: &str) -> Vec<(u32, String)> {
     text.trim_start_matches('\u{feff}')
         .lines()
@@ -223,13 +209,6 @@ fn csv_fields(line: &str) -> Vec<String> {
     fields
 }
 
-/// Whether a browser command line was started on exactly this profile.
-///
-/// A bare substring test would also hit `...\profiles\UCabc` when asked about
-/// `...\profiles\UCab`, and kill a browser some other account's upload is running in.
-/// So the path has to follow `--user-data-dir=` (Chrome's child processes quote either
-/// the whole flag or just its value) and be followed by a quote, a space or the end.
-/// Windows paths are compared without regard to case.
 pub fn uses_profile(command_line: &str, profile: &str) -> bool {
     const FLAG: &str = "--user-data-dir=";
     let line = command_line.to_lowercase();
@@ -246,10 +225,6 @@ pub fn uses_profile(command_line: &str, profile: &str) -> bool {
     })
 }
 
-/// Every browser this app starts goes into one job that dies with the app.
-///
-/// Without it a headless upload browser outlives a crash or a closed app, keeps its
-/// profile locked, and goes on talking to YouTube with nobody watching.
 #[cfg(windows)]
 mod job {
     use std::os::windows::io::AsRawHandle;
@@ -261,41 +236,32 @@ mod job {
         SetInformationJobObject,
     };
 
-    /// The job's handle as an integer, zero when it could not be made. It is never
-    /// closed: the process exiting closes it, and that is what kills the browsers.
     fn job() -> Option<HANDLE> {
         static JOB: OnceLock<usize> = OnceLock::new();
-        let raw = *JOB.get_or_init(|| {
-            // SAFETY: plain Win32 calls on a handle this function owns; the limit
-            // structure is plain data that outlives the call reading it.
-            unsafe {
-                let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-                if handle.is_null() {
-                    return 0;
-                }
-                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                let set = SetInformationJobObject(
-                    handle,
-                    JobObjectExtendedLimitInformation,
-                    std::ptr::from_ref(&limits).cast(),
-                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-                );
-                if set == 0 {
-                    CloseHandle(handle);
-                    return 0;
-                }
-                handle as usize
+        let raw = *JOB.get_or_init(|| unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return 0;
             }
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set == 0 {
+                CloseHandle(handle);
+                return 0;
+            }
+            handle as usize
         });
         (raw != 0).then_some(raw as HANDLE)
     }
 
-    /// Puts a freshly started browser in the job. Its later children follow it in; if
-    /// this fails the browser simply runs unowned, as it always used to.
     pub fn adopt(child: &std::process::Child) {
         if let Some(job) = job() {
-            // SAFETY: both handles are live for the duration of the call.
             unsafe {
                 AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE);
             }
@@ -509,9 +475,6 @@ mod tests {
 
     #[test]
     fn the_process_listing_is_read_through_its_quoting() {
-        // Real rows as `ConvertTo-Csv` writes them: every field quoted, inner quotes
-        // doubled, a BOM in front from the forced UTF-8, and one row whose command line
-        // the listing was not allowed to see.
         let text = "\u{feff}\"ProcessId\",\"CommandLine\"\r\n\
             \"36380\",\"\"\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"\" \
             --type=crashpad-handler \"\"--user-data-dir=C:\\Users\\Иван\\AppData\\cutix\\profiles\\UCa\"\" /prefetch:4\"\r\n\
@@ -559,16 +522,12 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_process_listing_runs_on_this_windows_and_comes_back_parseable() {
-        // Only lists; nothing is stopped. What it guards is the command itself — the old
-        // `wmic` one returned nothing at all once Windows stopped shipping it.
         let rows = browser_processes().expect("powershell ran");
         assert!(rows.iter().all(|(id, _)| *id > 0), "{rows:?}");
     }
 
     #[test]
     fn an_explicit_browser_path_that_does_not_exist_is_ignored_rather_than_launched() {
-        // Mutating the environment is unsound while another thread may be reading it.
-        // These tests run single-threaded against a variable only this test touches.
         unsafe { std::env::set_var(BROWSER_ENV, "/nowhere/chrome-that-is-not-there") };
         let found = find();
         unsafe { std::env::remove_var(BROWSER_ENV) };

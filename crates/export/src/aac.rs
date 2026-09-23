@@ -39,11 +39,6 @@ pub fn bitrate_for(channels: usize) -> u32 {
     (channels.clamp(1, 6) as u32) * BITRATE_PER_CHANNEL_BPS
 }
 
-/// Whether an AAC encoder can actually be opened on this machine.
-///
-/// Probes for the codec itself, not merely for the presence of the encoder API. Export
-/// picks between a muxed MP4 and a sidecar WAV on this answer before it creates the
-/// destination file, so it has to be about AAC specifically.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn is_available() -> bool {
     video::ffmpeg::can_encode_aac()
@@ -54,7 +49,6 @@ pub fn is_available() -> bool {
     false
 }
 
-/// Why AAC encoding is unavailable, for diagnostics. Not a user-facing message.
 pub fn unavailable_reason() -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {

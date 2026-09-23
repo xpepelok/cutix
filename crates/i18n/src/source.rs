@@ -156,8 +156,6 @@ mod tests {
 
     #[test]
     fn default_urls_point_at_the_fork() {
-        // Mutating the environment is unsound while another thread may be reading it.
-        // These tests run single-threaded against a variable only this test touches.
         unsafe { std::env::remove_var("CUTIX_LANG_URL") };
         unsafe { std::env::remove_var("CUTIX_LANG_BRANCH") };
         assert_eq!(

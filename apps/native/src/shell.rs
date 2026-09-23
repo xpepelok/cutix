@@ -41,11 +41,6 @@ pub const PREVIEW_MIN_WIDTH_PX: f32 = 320.0;
 const MIN_ROW: f32 = 0.30;
 const MAX_ROW: f32 = 0.85;
 
-/// The widest one column of a pair may grow to while leaving the other its minimum.
-///
-/// Float rounding across many drags can shrink a pair's total to a hair under two
-/// minimums, and `f32::clamp` panics when its bounds cross, so the ceiling never drops
-/// below the floor.
 fn column_ceiling(total: f32) -> f32 {
     (total - MIN_COLUMN).max(MIN_COLUMN)
 }
@@ -453,8 +448,6 @@ impl Shell {
     }
 
     fn cancel_interaction(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // The export dialog covers the editor, so Escape closes it first, as it
-        // closes every other dialog; a running export carries on in the background.
         if self.app.read(cx).export.open {
             self.app
                 .update(cx, |model, cx| model.close_export_dialog(cx));
@@ -640,9 +633,6 @@ impl Shell {
                         TextEvent::Submit => {
                             let name = field.text().trim().to_string();
                             this.name_edit = None;
-                            // The dropped field's focus handle would otherwise stay the
-                            // window's focus and keep the shell in typing mode, with
-                            // editor shortcuts blocked until the user clicks elsewhere.
                             window.focus(&this.focus);
                             let id = this
                                 .app
@@ -1029,8 +1019,6 @@ impl Render for Shell {
                 Route::Library => (self.library.clone().into_any_element(), "page-library"),
                 Route::Editor => (self.editor(window, cx).into_any_element(), "page-editor"),
             };
-            // Each route settles in under its own id, so switching screens replays
-            // the entrance while staying on one never does.
             crate::appear::page(div().size_full().child(page), id).into_any_element()
         };
 
@@ -1082,16 +1070,12 @@ impl Render for Shell {
                         return;
                     }
                     if event.keystroke.key == "escape" {
-                        // The topmost thing closes first: a YouTube or settings window
-                        // sits above everything the editor could be in the middle of.
                         let closed = this
                             .assets
                             .update(cx, |panel, _| panel.dismiss_youtube_overlays());
                         if closed {
                             cx.notify();
                         } else if crate::input::is_typing(window, cx) {
-                            // Escape in a field only leaves the field; the clip it is
-                            // editing stays selected so the properties stay on screen.
                             this.name_edit = None;
                             window.focus(&this.focus);
                             cx.notify();

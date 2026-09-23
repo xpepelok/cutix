@@ -149,11 +149,6 @@ pub fn run(
         return Err(ExportError::Empty);
     }
 
-    // The preview drops a layer whose file is gone; an export must not, or the person
-    // ends up with a finished-looking video full of holes (and, in YouTube mode, with
-    // it published). Refusing here, before any output exists, also means a clip near
-    // the end does not cost minutes of rendering first. The composer below stays
-    // strict as well, for a file that disappears mid-render.
     if let Some(id) = missing_media(&request.project, request.scene_id.as_deref(), media)
         .into_iter()
         .next()
@@ -224,18 +219,11 @@ pub fn run(
         total_frames,
     );
     if outcome.is_err() {
-        // `encode` has dropped the backend by now, so the file is closed. Whatever it
-        // wrote is a headerless fragment that no player opens, and leaving it at the
-        // destination would look like a finished export.
         discard_partial_output(&request.destination);
     }
     outcome
 }
 
-/// Renders every frame, mixes the audio and finalises the container.
-///
-/// Owns the backend so that on any failure it is dropped (and its file closed) before
-/// the caller removes the partial output.
 #[allow(clippy::too_many_arguments)]
 fn encode(
     request: &ExportRequest,
@@ -265,10 +253,6 @@ fn encode(
         }
 
         while submitted < total_frames && in_flight.len() < PIPELINE_DEPTH {
-            // Positions come from the frame index against the exact rational frame
-            // duration. Deriving them from a float fps drifts against the timeline the
-            // player showed, and the rounding policy belongs in the `time` crate rather
-            // than being re-invented per pipeline.
             let time = MediaTime::from_frame(submitted as i64, request.frame_rate)
                 .ok_or(ExportError::InvalidFrameRate)?;
             let pending = composer
@@ -378,9 +362,6 @@ fn encode(
     })
 }
 
-/// Best effort: the destination may never have been created, or the backend may have
-/// already removed it, and neither is worth turning into a second error on top of the
-/// one being reported.
 fn discard_partial_output(destination: &Path) {
     let _ = std::fs::remove_file(destination);
 }

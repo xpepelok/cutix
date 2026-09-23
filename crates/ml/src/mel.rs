@@ -181,9 +181,6 @@ pub fn resample_to_16k(samples: &[f32], sample_rate: u32) -> Vec<f32> {
     out
 }
 
-/// The centre frequency of each mel band, in hertz.
-///
-/// Only the filterbank test asks for these; compiled for it alone.
 #[cfg(test)]
 pub fn mel_center_frequencies(n_mels: usize, sample_rate: u32) -> Vec<f64> {
     let max_mel = hz_to_mel(sample_rate as f64 / 2.0);

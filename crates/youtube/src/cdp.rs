@@ -16,8 +16,6 @@ fn protocol<T: std::fmt::Display>(error: T) -> Failure {
     Failure::Protocol(error.to_string())
 }
 
-/// Events that arrived while a call was waiting for its own reply, kept for whoever
-/// waits on them next.
 #[derive(Default)]
 struct Mailbox {
     events: VecDeque<Value>,
@@ -119,7 +117,6 @@ impl Connection {
         self.events.file(message);
     }
 
-    /// Forgets every queued event of this kind, so the next wait only sees a fresh one.
     pub fn discard_events(&mut self, method: &str) {
         self.events.discard(method);
     }
@@ -501,9 +498,6 @@ impl Page {
             json!({ "enabled": true }),
         )?;
 
-        // A chooser event left over from an earlier pick (a second click, a retried
-        // dialog) would otherwise be taken as this one's, and the file would be handed
-        // to an input that is no longer on the page.
         connection.discard_events("Page.fileChooserOpened");
         let clicked = self.click(connection, button);
         let opened = clicked

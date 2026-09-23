@@ -117,10 +117,6 @@ pub fn read_draft(raw: &str, name: &str) -> Result<Draft, CapCutError> {
     })
 }
 
-/// CapCut stores the frame rate as a float. Rounding 29.97 to 30/1 would drift the
-/// template by a frame every ~33 s against NTSC footage, so rates that sit on an
-/// NTSC value (n·1000/1001) keep that exact rational; other fractional rates keep
-/// millisecond precision.
 fn fps_rational(fps: f64) -> FpsSpec {
     const TOLERANCE: f64 = 0.005;
     if !fps.is_finite() || fps <= 0.0 {

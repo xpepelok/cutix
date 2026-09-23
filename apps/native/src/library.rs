@@ -150,11 +150,6 @@ pub const SORT_KEYS: [SortKey; 6] = [
 ];
 
 impl SortKey {
-    /// Whether ordering by this key needs the media probed first.
-    ///
-    /// Duration and resolution only exist once a file has been inspected; the rest come
-    /// straight from the directory entry. Only the tests ask this today, so it compiles
-    /// for them alone rather than shipping as a method nothing calls.
     #[cfg(test)]
     pub fn needs_probe(self) -> bool {
         matches!(self, SortKey::Duration | SortKey::Resolution)
@@ -234,11 +229,6 @@ pub fn folder_of(entry: &Entry, root: &Path) -> String {
     }
 }
 
-/// Pulls the members of each group together while keeping the chosen order.
-///
-/// Groups come in the order their first member appears and entries keep their
-/// relative order inside a group, so sorting by size still reads biggest-first within
-/// every folder.
 pub fn gather_groups(entries: &mut [Entry], label: impl Fn(&Entry) -> String) {
     let mut first_seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut ranks = Vec::with_capacity(entries.len());

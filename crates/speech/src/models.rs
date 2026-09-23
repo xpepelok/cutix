@@ -191,8 +191,6 @@ pub fn is_voice_cached(voice: &VoiceSpec) -> bool {
     is_file_cached(&cached_voice_path(voice), 1024)
 }
 
-/// Bounds the silence between two reads, not the whole transfer: voices are tens of
-/// MB, but a stalled connection must not hang synthesis forever.
 const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const DOWNLOAD_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -211,8 +209,6 @@ fn download(url: &str, target: &Path, mut on_progress: impl FnMut(f32)) -> Resul
         .call()
         .map_err(|error| SpeechError::Download(error.to_string()))?;
     if is_html(response.header("Content-Type")) {
-        // A login wall or error page served with 200 would otherwise be cached as the
-        // model and only fail later with an opaque ONNX/JSON parse error.
         return Err(SpeechError::Download(format!(
             "{url} answered with an HTML page instead of the file"
         )));

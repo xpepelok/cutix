@@ -201,9 +201,6 @@ fn discrete_channel_value(
     let AnimationChannel::Discrete { keys } = channel else {
         return None;
     };
-    // Keys are not guaranteed to be stored in time order (a key dragged past its
-    // neighbour keeps its slot), so the value in force is the latest key at or before
-    // `time`, not the last such key in the array.
     keys.iter()
         .filter(|key| key.time <= time)
         .max_by_key(|key| key.time)

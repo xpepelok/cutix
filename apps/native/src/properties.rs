@@ -255,15 +255,10 @@ pub struct PropertiesPanel {
     rail_scroll: ScrollHandle,
 }
 
-/// One colour setting shown as a labelled swatch with an editable hex field.
 struct ColorRow {
     label: String,
-    /// Which colour of the element this row edits.
     setting: TextSetting,
-    /// The colour the element holds right now, as a hex string.
     current: String,
-    /// Where the colour lives inside the element, for settings stored under a nested
-    /// object rather than at the top level. `None` when the setting names it directly.
     path: Option<&'static str>,
 }
 
@@ -1506,8 +1501,6 @@ impl PropertiesPanel {
                 }
             }
             Target::Text(setting) => {
-                // Colour settings are stored with a leading hash; content is stored
-                // verbatim. Both keep the typed text as-is, so they share a branch.
                 let value = if matches!(setting, TextSetting::Content) || text.starts_with('#') {
                     text
                 } else {
@@ -1603,9 +1596,6 @@ fn inline_editor(
                 return;
             };
             match editing.field.buffer.key_down(event) {
-                // Dropping the field does not move the window's focus off its
-                // handle, and a focused field keeps the shell in typing mode with
-                // the editing shortcuts blocked. Blur, as the bookmark field does.
                 TextEvent::Submit => {
                     this.commit_editing(cx);
                     window.blur();
@@ -5889,11 +5879,6 @@ mod tests {
     }
 }
 
-/// Reads a number typed into a property field.
-///
-/// Accepts a decimal comma, which is what a Russian or German keyboard produces, and
-/// refuses `nan` and `inf`: Rust parses both, but a non-finite value serialises as
-/// `null` and the project would no longer load.
 pub(crate) fn parse_typed_number(text: &str) -> Option<f64> {
     let text = text.trim().replace(',', ".");
     let value = text.parse::<f64>().ok()?;

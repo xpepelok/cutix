@@ -251,10 +251,6 @@ pub struct Chord {
     pub key: String,
 }
 
-/// Keys a focused text field answers itself, with or without Control: editing,
-/// the clipboard and caret movement. Undo is deliberately absent: no field keeps
-/// an undo history, so Ctrl+Z and Ctrl+Y stay with the timeline instead of being
-/// swallowed by a field that would do nothing with them.
 const TEXT_FIELD_KEYS: &[&str] = &[
     "a",
     "c",
@@ -274,11 +270,6 @@ const TEXT_FIELD_KEYS: &[&str] = &[
 ];
 
 impl Chord {
-    /// Whether a focused text field owns this chord rather than the timeline.
-    ///
-    /// Plain keys are always the field's. With Control only the text-editing chords
-    /// are: Ctrl+V in a field pastes text, it must not also paste clips onto the
-    /// timeline, while Ctrl+S or Ctrl+E still reach the editor.
     pub fn belongs_to_text_field(&self) -> bool {
         if self.alt {
             return false;
@@ -476,8 +467,6 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn unbind(&mut self, chord: &Chord) {
         if self.map.remove(chord).is_some() {
@@ -485,15 +474,11 @@ impl Keybindings {
         }
     }
 
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
@@ -656,8 +641,6 @@ mod tests {
 
     #[test]
     fn undo_and_redo_reach_the_timeline_even_while_a_field_is_focused() {
-        // Fields have no undo of their own, so claiming these chords would only
-        // swallow them.
         let chord = |shift, key: &str| Chord::new(true, false, shift, key.to_string());
         assert!(!chord(false, "z").belongs_to_text_field());
         assert!(!chord(true, "z").belongs_to_text_field());

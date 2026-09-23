@@ -179,8 +179,6 @@ fn main() {
         _ => {}
     }
 
-    // Registration points Explorer at whichever executable ran last. A development
-    // build or a throwaway test copy must not steal the entries from the installed one.
     let registers =
         !cfg!(debug_assertions) && std::env::var_os("CUTIX_NO_SHELL_REGISTRATION").is_none();
     if registers {

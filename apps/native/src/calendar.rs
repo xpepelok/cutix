@@ -56,12 +56,6 @@ pub fn clamp_day(year: i32, month: u32, day: u32) -> u32 {
     day.clamp(1, days_in_month(year, month).max(1))
 }
 
-/// The UTC stamp of the instant a picked date and time name on the clock in `zone`.
-///
-/// The picker shows the local clock and Studio is told the local clock, but what is
-/// stored and checked against now is the instant — a stamp built by gluing `Z` onto the
-/// local digits would be off by the whole UTC offset. Impossible parts are clamped first,
-/// so the 31st of February stays in February rather than rolling into March.
 pub fn to_stamp(
     year: i32,
     month: u32,
@@ -90,10 +84,6 @@ pub fn weekday_key(index: u32) -> String {
     format!("calendar.weekday.{}", index.min(6))
 }
 
-/// The date and time a stamp's instant reads as on the clock in `zone`.
-///
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn from_stamp(stamp: &str, zone: youtube::clock::Zone) -> Option<(i32, u32, u32, u32, u32)> {
     let wall = zone.wall_clock(youtube::unix_from_iso(stamp.trim())?);

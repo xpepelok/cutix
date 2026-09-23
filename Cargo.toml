@@ -27,21 +27,13 @@ members = [
     "crates/youtube",
 ]
 
-# Settings every crate in the workspace inherits with `field.workspace = true`, so a
-# version bump or a toolchain move is one edit rather than twenty-four.
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# The minimum toolchain the workspace is tested against. Edition 2024 needs 1.85; the CI
-# matrix pins this exact version alongside stable so a newer feature cannot slip in
-# unnoticed. Raise it deliberately, in its own change, with a note in the release notes.
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/xpepelok/cutix"
 
-# Versions of dependencies more than one crate uses. Declaring them here keeps a single
-# copy in the dependency graph and stops two crates drifting onto versions whose types no
-# longer unify.
 [workspace.dependencies]
 bytes = "1"
 image = { version = "0.25", default-features = false }
@@ -51,17 +43,10 @@ tempfile = "3"
 thiserror = "2.0"
 uuid = { version = "1", features = ["v4"] }
 
-# Lints applied to every crate. Raised here rather than as `#![deny]` in each lib.rs so
-# that adding a crate cannot quietly opt out of them.
 [workspace.lints.rust]
-# An unused item is either dead code to delete or a gap in the public surface. Both are
-# worth seeing rather than silencing per file.
 unused = { level = "warn", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
-# A function that has grown this many parameters is describing a context, not an argument
-# list. The fix is a context struct, so the lint stays on.
 too_many_arguments = "warn"
-# A signature this involved is a missing type alias or a missing type.
 type_complexity = "warn"

@@ -13,8 +13,6 @@ pub struct TemplateEntry {
 }
 
 impl TemplateEntry {
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn has_timeline(&self) -> bool {
         cutix_project::template_project::parse_scenes(&self.manifest.scenes).is_some()

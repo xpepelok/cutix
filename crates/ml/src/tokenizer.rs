@@ -37,9 +37,6 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    /// Whether this id is a control token rather than text.
-    ///
-    /// Only the tests ask; compiled for them alone.
     #[cfg(test)]
     pub fn is_special(&self, id: u32) -> bool {
         self.specials.contains_key(&id)

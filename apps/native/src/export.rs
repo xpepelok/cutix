@@ -242,13 +242,6 @@ impl ExportSession {
         }
     }
 
-    /// Drops what belonged to the project that was open.
-    ///
-    /// A destination chosen for one project must not carry into the next: exporting
-    /// the next project would otherwise overwrite the file just made for the last
-    /// one. Only a running export keeps its status, it still has to report how it
-    /// ended; the destination goes even then, since the run already resolved its
-    /// own path and the finished report carries it.
     pub fn forget_project(&mut self) {
         self.open = false;
         self.destination = None;
@@ -429,9 +422,6 @@ impl AppModel {
         let matte_root = Some(self.store.project_directory(&project.metadata.id));
         let scene_id = Some(project.current_scene_id.clone());
 
-        // The job refuses a clip whose file is gone (a video with holes must not be
-        // written, let alone published to YouTube), but it only knows the media id.
-        // Name the asset here, where the store is at hand, in the words the preview uses.
         let resolver = StoreResolver::new(media);
         if let Some(id) = cutix_playback::missing_media(&project, scene_id.as_deref(), &resolver)
             .into_iter()
@@ -1454,17 +1444,13 @@ fn notice(colors: Palette, title: String, body: String) -> Div {
         )
 }
 
-/// What the progress readout shows while an export runs.
 #[derive(Clone, Copy)]
 struct RunningProgress {
-    /// How far through, from 0 to 1.
     fraction: f32,
-    /// Frames written so far, and how many there will be.
     frame: u64,
     total: u64,
     frames_per_second: f32,
     stage: Stage,
-    /// Animation phase for the moving highlight, from 0 to 1.
     phase: f32,
 }
 

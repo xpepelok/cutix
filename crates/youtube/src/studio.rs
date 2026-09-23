@@ -158,12 +158,6 @@ fn click_if_present(connection: &mut Connection, page: &Page, selector: &str) ->
     .unwrap_or(false)
 }
 
-/// The caller's progress callback, plus the last thing it was told.
-///
-/// Its answer is the only way a Cancel reaches the upload, so it is asked at every stage
-/// change and, by re-sending the last stage, on every poll of a long wait — without
-/// that a Cancel pressed while Studio is still opening or walking its steps would only
-/// be seen once the transfer began, or never.
 struct Progress<'a> {
     report: &'a mut dyn FnMut(Stage, u32) -> Control,
     last: (Stage, u32),
@@ -239,13 +233,10 @@ fn drive(
 
     progress.tell(Stage::Publishing, 0)?;
     finish(connection, page, settings, progress)?;
-    // Past Done there is nothing left to take back, so what the callback answers to the
-    // last report no longer matters.
     let _ = progress.tell(Stage::Done, 100);
     Ok(video_id)
 }
 
-/// [`Page::wait_until`], asking the caller between polls whether to go on.
 fn wait_or_cancel(
     connection: &mut Connection,
     page: &Page,
@@ -559,7 +550,6 @@ fn open_dialog(
     page: &Page,
     progress: &mut Progress,
 ) -> Result<(), Failure> {
-    // A timed-out wait only means "try the next way in"; a Cancel ends the whole thing.
     let appeared = |connection: &mut Connection, progress: &mut Progress| {
         let waited = wait_or_cancel(
             connection,
@@ -983,7 +973,6 @@ fn finish(
         "publish button",
         progress,
     )?;
-    // The last moment a Cancel can still leave the video an unpublished draft.
     progress.still_wanted()?;
     trace_dialog(connection, page, "before-done");
     if !real_click(connection, page, css::DONE) {
@@ -1150,20 +1139,12 @@ fn apply_visibility(
     }
 }
 
-/// Sets the schedule, and proves Studio took it.
-///
-/// Studio reads what is typed into its picker as a time on the browser's clock, which
-/// is this machine's local one, while the settings carry a UTC instant — so the instant
-/// is turned into the local reading first. Each field is committed with Enter and read
-/// back afterwards: a picker that quietly kept its own default would otherwise publish
-/// the video at a time nobody chose.
 fn schedule(connection: &mut Connection, page: &Page, publish_at: &str) -> Result<(), Failure> {
     let wanted = WallClock::of_stamp(publish_at, Zone::Local)
         .ok_or_else(|| Failure::PageChanged(format!("schedule time {publish_at:?}")))?;
     if !click_if_present(connection, page, css::SCHEDULE_TOGGLE) {
         return Err(Failure::PageChanged(css::SCHEDULE_TOGGLE.to_string()));
     }
-    // Not a timeout worth retrying: a schedule that never opens is a changed page.
     page.wait_until(
         connection,
         &visible(css::SCHEDULE_DATE_TRIGGER),
@@ -1198,8 +1179,6 @@ fn schedule(connection: &mut Connection, page: &Page, publish_at: &str) -> Resul
     Ok(())
 }
 
-/// Types the date where Studio takes it: the text field of the small dialog clicking
-/// the date opens, or, when no dialog appears, a field inside the date itself.
 fn type_date(connection: &mut Connection, page: &Page, date: &str) -> Result<(), Failure> {
     let dialog = click_if_present(connection, page, css::SCHEDULE_DATE_TRIGGER)
         && page
@@ -1242,7 +1221,6 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/// A reading of a clock, in the fields Studio's schedule picker shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WallClock {
     pub year: i64,
@@ -1253,7 +1231,6 @@ pub struct WallClock {
 }
 
 impl WallClock {
-    /// What a clock in `zone` shows at the instant a UTC publish stamp names.
     pub fn of_stamp(publish_at: &str, zone: Zone) -> Option<Self> {
         let wall = zone.wall_clock(crate::unix_from_iso(publish_at.trim())?);
         let (year, month, day) = crate::civil_from_unix(wall);
@@ -1267,13 +1244,11 @@ impl WallClock {
         })
     }
 
-    /// The date the way English Studio writes it, `Sep 23, 2026`.
     pub fn studio_date(&self) -> String {
         let month = MONTHS[(self.month.clamp(1, 12) - 1) as usize];
         format!("{month} {}, {}", self.day, self.year)
     }
 
-    /// The time the way English Studio writes it, `3:05 PM`.
     pub fn studio_time(&self) -> String {
         let (hour, half) = match self.hour {
             0 => (12, "AM"),
@@ -1285,8 +1260,6 @@ impl WallClock {
     }
 }
 
-/// Year, month and day out of the date Studio shows — `Sep 23, 2026`, `23 Sep 2026`,
-/// `September 23, 2026` or `2026-09-23`.
 pub fn read_studio_date(text: &str) -> Option<(i64, u32, u32)> {
     let words: Vec<&str> = text
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -1322,7 +1295,6 @@ fn month_number(word: &str) -> Option<u32> {
         .map(|index| index as u32 + 1)
 }
 
-/// Hour (0–23) and minute out of the time Studio shows, on a 12- or 24-hour clock.
 pub fn read_studio_time(text: &str) -> Option<(u32, u32)> {
     let lower = text.trim().to_ascii_lowercase();
     let (hour, rest) = lower.split_once(':')?;

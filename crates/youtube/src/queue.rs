@@ -8,9 +8,6 @@ use std::path::{Path, PathBuf};
 pub const QUEUE_FILE: &str = "youtube-queue.json";
 const MAX_TASKS: usize = 100;
 
-/// The shape of the stored queue. A file without the field is from a build whose
-/// `publish_at` stamps were local digits with a `Z` on the end (see
-/// [`crate::utc_stamp_of_local_digits`]); from this format on they are UTC instants.
 const STAMPS_ARE_UTC: u32 = 1;
 const CURRENT_FORMAT: u32 = STAMPS_ARE_UTC;
 
@@ -121,7 +118,6 @@ pub struct Queue {
     pub tasks: Vec<Task>,
     #[serde(default)]
     counter: u64,
-    /// Missing from a file means format 0; a queue made in memory is always current.
     #[serde(default)]
     format: u32,
 }
@@ -141,9 +137,6 @@ impl Queue {
         Self::load_in(directory, Zone::Local)
     }
 
-    /// Loads the stored queue, reading any legacy schedule on the clock in `zone` —
-    /// the machine's own outside tests, since that is the clock those digits were
-    /// picked on.
     pub fn load_in(directory: &Path, zone: Zone) -> Self {
         let Ok(text) = std::fs::read_to_string(directory.join(QUEUE_FILE)) else {
             return Self::default();
@@ -154,10 +147,6 @@ impl Queue {
         queue
     }
 
-    /// Brings a queue written by an earlier build up to the current format.
-    ///
-    /// Only a stamp that parses is converted; anything else is left for `validate` to
-    /// refuse as it always did.
     fn upgrade_format(&mut self, zone: Zone) {
         if self.format < STAMPS_ARE_UTC {
             for task in &mut self.tasks {
@@ -178,12 +167,6 @@ impl Queue {
         std::fs::write(directory.join(QUEUE_FILE), text)
     }
 
-    /// Settles a task the last run left marked as uploading.
-    ///
-    /// It goes to failed-but-retryable rather than straight back to waiting: the app may
-    /// have gone down after Studio already had the video, as a draft or even published,
-    /// and a silent restart would upload it a second time. The person checks and presses
-    /// retry.
     pub fn reclaim_interrupted(&mut self) {
         for task in &mut self.tasks {
             if task.state == TaskState::Running {
@@ -641,8 +624,6 @@ mod tests {
     fn a_schedule_queued_by_the_previous_build_is_read_on_the_clock_it_was_picked_on() {
         let directory = temp_dir("legacy-schedule");
         std::fs::create_dir_all(&directory).expect("mkdir");
-        // 15:00 picked in Moscow, stored by the old build as if it were UTC — and one
-        // waiting task with no schedule, plus one already stopped that will be retried.
         let legacy = r#"{"tasks":[
             {"id":"q1","account_id":"chan","settings":{"title":"scheduled","description":"",
              "tags":[],"category_id":"22","privacy":"private","made_for_kids":false,
@@ -682,7 +663,6 @@ mod tests {
             "a stopped row is converted too: it may be retried"
         );
 
-        // Saved by this build, the file says so, and a reload converts nothing twice.
         queue.save(&directory).expect("save");
         let text = std::fs::read_to_string(directory.join(QUEUE_FILE)).expect("read");
         assert!(text.contains("\"format\": 1"));

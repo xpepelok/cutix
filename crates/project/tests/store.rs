@@ -382,7 +382,6 @@ fn deleting_a_cutout_sweeps_its_matte_files_once_the_project_is_swept() {
         video.cutout = None;
     }
     store.save(&project).expect("save again");
-    // Saving alone keeps them for the undo history; the close/load sweep drops them.
     assert_eq!(fs::read_dir(&directory).expect("mattes").count(), 5);
     store.sweep_mattes(&project).expect("sweep");
     assert_eq!(fs::read_dir(&directory).expect("mattes").count(), 0);
@@ -613,7 +612,6 @@ fn saving_keeps_mattes_an_undo_could_still_bring_back() {
     store.save(&project).expect("save with cutout");
     assert_eq!(matte_file_count(&store, &project), 3);
 
-    // The cutout clip is deleted and autosaved; the undo history still holds it.
     let mut without_clip = project.clone();
     without_clip.scenes[0].tracks.main.elements_mut().clear();
     store.save(&without_clip).expect("autosave");
@@ -635,7 +633,6 @@ fn sweeping_mattes_drops_orphans_but_keeps_what_the_document_uses() {
         .join("stray.png");
     fs::write(&stray, b"orphan").expect("stray matte");
 
-    // The caller's copy still holds the mattes inline; the files it maps to stay.
     let removed = store.sweep_mattes(&project).expect("sweep");
     assert_eq!(removed, 1);
     assert!(!stray.exists());

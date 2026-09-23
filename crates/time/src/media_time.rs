@@ -40,36 +40,26 @@ impl MediaTime {
         self.0.to_f64().unwrap_or(0.0) / TICKS_PER_SECOND_F64
     }
 
-    /// The start of frame `frame` at `rate`.
-    ///
-    /// Exact for every valid rate, including rates whose frame is a fractional number of
-    /// ticks: the index is scaled before it is divided, so distant frames do not drift.
-    /// `None` when the rate is invalid or the position overflows.
     pub fn from_frame(frame: i64, rate: FrameRate) -> Option<Self> {
         Some(Self(rate.frame_duration()?.ticks_at_frame(frame)?))
     }
 
-    /// The index of the frame boundary nearest this time, ties going to the later frame.
     pub fn to_frame_round(self, rate: FrameRate) -> Option<i64> {
         rate.frame_duration()?.frame_round(self.0)
     }
 
-    /// The index of the frame that is on screen at this time.
     pub fn to_frame_floor(self, rate: FrameRate) -> Option<i64> {
         rate.frame_duration()?.frame_floor(self.0)
     }
 
-    /// This time snapped to the nearest frame boundary.
     pub fn round_to_frame(self, rate: FrameRate) -> Option<Self> {
         Self::from_frame(self.to_frame_round(rate)?, rate)
     }
 
-    /// This time snapped back to the start of the frame that is on screen.
     pub fn floor_to_frame(self, rate: FrameRate) -> Option<Self> {
         Self::from_frame(self.to_frame_floor(rate)?, rate)
     }
 
-    /// Whether this time sits exactly on a frame boundary.
     pub fn is_frame_aligned(self, rate: FrameRate) -> Option<bool> {
         Some(rate.frame_duration()?.is_aligned(self.0))
     }

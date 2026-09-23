@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
-# Downloads the LGPL shared FFmpeg build we ship, proves it carries no GPL
-# component, and lays the runtime libraries plus their licence into a directory.
-#
-#   scripts/bundle-ffmpeg.sh <platform> <destination>
-#
-# <platform> is "windows", "windows-arm64", "linux" or "linux-arm64". The destination ends up holding the five
-# shared libraries the loader opens, the FFmpeg licence text, and PROVENANCE.txt
-# recording exactly which build this is.
 set -euo pipefail
 
 USAGE="usage: bundle-ffmpeg.sh <windows|windows-arm64|linux|linux-arm64> <destination>"
 PLATFORM="${1:?$USAGE}"
 DESTINATION="${2:?$USAGE}"
 
-# The stable 8.1 branch rather than master: master builds of the NVENC wrapper
-# demand a driver newer than most machines have, and a release branch keeps the
-# library majors fixed between releases so a bundled copy stays replaceable.
 RELEASE_TAG="latest"
 BRANCH="n8.1"
 BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/${RELEASE_TAG}"
@@ -47,9 +36,6 @@ FFMPEG="$ROOT/bin/ffmpeg"
 [ -x "$FFMPEG" ] || FFMPEG="$ROOT/bin/ffmpeg.exe"
 [ -f "$FFMPEG" ] || { echo "no ffmpeg binary under $ROOT/bin" >&2; exit 1; }
 
-# Exact flag matching. A substring grep is not good enough: "--enable-gpl" is a
-# substring of "--enable-gpl-something" and every flag containing "gpl" trips a
-# loose pattern, so each flag is compared whole after splitting on whitespace.
 CONFIGURATION="$("$FFMPEG" -hide_banner -version 2>/dev/null | grep '^configuration:' || true)"
 [ -n "$CONFIGURATION" ] || { echo "ffmpeg -version printed no configuration line" >&2; exit 1; }
 

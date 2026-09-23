@@ -44,8 +44,6 @@ fn is_consonant(letter: char) -> bool {
             | 'ч'
             | 'ш'
             | 'щ'
-            // Voiced allophones that `apply_voicing` writes back into the word (ц, ч, х
-            // before a voiced obstruent); without them they are skipped as non-letters.
             | 'ʣ'
             | 'ʥ'
             | 'ɣ'
@@ -135,8 +133,6 @@ fn transliterate_latin(letter: char) -> &'static str {
     }
 }
 
-/// Runs up to this many digits are read as one number (below 10^18, so every value
-/// fits in u64 and has a named scale in `number_to_words`).
 const MAX_NUMBER_DIGITS: usize = 18;
 
 pub fn normalise(text: &str) -> String {
@@ -147,8 +143,6 @@ pub fn normalise(text: &str) -> String {
         if digits.is_empty() {
             return;
         }
-        // Longer runs (phone, card or serial numbers) exceed the named scales and are
-        // better read out digit by digit than truncated to their first 18 digits.
         let words = if digits.len() > MAX_NUMBER_DIGITS {
             digits
                 .chars()
@@ -292,8 +286,6 @@ pub fn number_to_words(value: u64) -> String {
         return ONES[0].to_string();
     }
 
-    // One entry per power of 1000 up to u64::MAX (~1.8·10^19), so every group has
-    // its own name instead of falling back to the last scale.
     const SCALES: [([&str; 3], bool); 7] = [
         (["", "", ""], false),
         (["тысяча", "тысячи", "тысяч"], true),

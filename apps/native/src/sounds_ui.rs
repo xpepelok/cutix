@@ -53,9 +53,6 @@ pub fn save_saved(saved: &SavedSounds) {
 }
 
 impl SavedSounds {
-    /// Brings entries saved by an earlier build up to date: a Freesound result kept
-    /// its OAuth-only download URL, which "add to timeline" picks first and which
-    /// answers 401 every time. Returns how many entries changed.
     pub fn repair_download_urls(&mut self) -> usize {
         self.entries
             .iter_mut()

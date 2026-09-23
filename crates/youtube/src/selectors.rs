@@ -74,11 +74,8 @@ pub mod studio {
         )
     }
     pub const SCHEDULE_TOGGLE: &str = "#second-container-expand-button";
-    /// The date as the schedule shows it; clicking it opens the date picker.
     pub const SCHEDULE_DATE_TRIGGER: &str = "#datepicker-trigger";
-    /// The text field of the picker that opens, which is where Studio takes a typed date.
     pub const SCHEDULE_DATE_INPUT: &str = "ytcp-date-picker tp-yt-paper-dialog input";
-    /// A field inside the date itself, for a layout that opens no picker.
     pub const SCHEDULE_DATE: &str = "#datepicker-trigger input";
     pub const SCHEDULE_TIME: &str = "#time-of-day-container input";
 }

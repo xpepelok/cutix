@@ -183,11 +183,8 @@ pub const DEFINITIONS: &[GraphicDefinition] = &[
     },
 ];
 
-/// One named parameter of a shape preset, as `(name, value)`.
 pub type ShapeParameter = (&'static str, f64);
 
-/// A shape name from an older project file, the current shape it maps onto, and the
-/// parameters that reproduce it: `(legacy name, shape, parameters)`.
 pub type LegacyShapePreset = (&'static str, &'static str, &'static [ShapeParameter]);
 
 pub const LEGACY_SHAPE_PRESETS: &[LegacyShapePreset] = &[

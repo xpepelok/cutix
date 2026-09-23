@@ -207,8 +207,6 @@ pub fn stage_label(stage: Stage, fraction: f32) -> String {
 
 pub struct Running {
     pub task_id: String,
-    /// Whose browser profile the upload has open. Kept here rather than looked up in
-    /// the queue, so it still answers once the task's row is gone.
     pub account_id: String,
     pub job: Arc<Mutex<UploadJob>>,
     pub cancel: Arc<AtomicBool>,
@@ -471,8 +469,6 @@ pub struct Reauthing {
     pub cancel: Arc<AtomicBool>,
 }
 
-/// A date and time as a clock in some zone reads it — what the pickers show and edit.
-/// It only becomes an instant through [`Scheduled::seconds`], with the zone it was read in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scheduled {
     pub year: i32,
@@ -483,7 +479,6 @@ pub struct Scheduled {
 }
 
 impl Scheduled {
-    /// The top of the hour an hour from now, on the clock in `zone`.
     pub fn soon(now: i64, zone: Zone) -> Self {
         Self {
             minute: 0,
@@ -491,7 +486,6 @@ impl Scheduled {
         }
     }
 
-    /// What the clock in `zone` reads at `unix`.
     pub fn at(unix: i64, zone: Zone) -> Self {
         let wall = zone.wall_clock(unix);
         let (year, month, day) = youtube::civil_from_unix(wall);
@@ -505,7 +499,6 @@ impl Scheduled {
         }
     }
 
-    /// The instant this reading names, read on the clock in `zone`.
     pub fn seconds(&self, zone: Zone) -> i64 {
         zone.instant(unix_from_civil(
             self.year,
@@ -516,7 +509,6 @@ impl Scheduled {
         ))
     }
 
-    /// The UTC stamp the publish settings carry for this reading of the clock in `zone`.
     pub fn stamp(&self, zone: Zone) -> String {
         crate::calendar::to_stamp(
             self.year,
@@ -621,8 +613,6 @@ impl PublishForm {
     }
 
     pub fn settings(&self) -> PublishSettings {
-        // The picker shows the local clock; the settings carry the instant it names, so
-        // the check against now and the time typed into Studio agree with what was picked.
         let schedule = self
             .schedule
             .as_ref()
@@ -670,10 +660,6 @@ pub enum Edge {
     To,
 }
 
-/// The instants a history filter's edges name, read on the clock in `zone`.
-///
-/// The pickers only go to the minute, so the end takes in the whole of its last minute:
-/// "up to 23:59" has to include an upload at 23:59:30.
 pub fn history_window(
     from: Option<Scheduled>,
     to: Option<Scheduled>,
@@ -685,12 +671,6 @@ pub fn history_window(
     )
 }
 
-/// The start or the end of today on the clock in `zone`: what an empty filter edge
-/// opens on.
-///
-/// Today as the clock reads it right now — not the proposed schedule an hour ahead,
-/// which in the last hour of the day is already tomorrow and would hide every upload
-/// made today, the one just finished included.
 pub fn day_edge(edge: Edge, now: i64, zone: Zone) -> Scheduled {
     let today = Scheduled::at(now, zone);
     match edge {
@@ -820,12 +800,8 @@ pub struct Youtube {
     pub hovered_action: Option<String>,
     pub notice: Option<String>,
     pub signing_in: bool,
-    /// The account whose channel details a headless browser is fetching right now.
     pub refreshing: Option<String>,
-    /// Accounts whose details were already fetched once this run. One that stays
-    /// incomplete (no avatar, a page that never rendered) is not fetched again and again.
     pub refresh_tried: Vec<String>,
-    /// The one re-authorisation that may be open at a time.
     pub reauthing: Option<Reauthing>,
 }
 
@@ -845,7 +821,6 @@ impl Default for Youtube {
 }
 
 impl Youtube {
-    /// The YouTube state kept under `directory`: its accounts, history and queue.
     pub fn at(directory: PathBuf, sound: crate::preview_audio::Sound) -> Self {
         let accounts = Accounts::load(&directory);
 
@@ -925,26 +900,13 @@ impl Youtube {
             .any(|running| running.account_id == account_id)
     }
 
-    /// Whether a browser has the account's profile open right now.
-    ///
-    /// Two browsers cannot share a profile: launching a second one clears the first out
-    /// of the way (`release_profile` stops every process on it), so whatever the first
-    /// was doing — an upload, a sign-in, a refresh — dies with it.
     pub fn profile_in_use(&self, account_id: &str) -> bool {
         self.is_reauthing(account_id)
             || self.is_refreshing(account_id)
             || self.is_uploading_on(account_id)
     }
 
-    /// Claims an account's profile for a re-authorisation, handing back its cancel flag,
-    /// or the notice that says why it cannot start.
-    ///
-    /// Only one runs at a time, so a Cancel and a result can never land on the wrong
-    /// account; and never on a profile an upload or a refresh has open.
     pub fn begin_reauth(&mut self, account_id: &str) -> Result<Arc<AtomicBool>, String> {
-        // Both refusals read as a reason to wait. `signingIn` ("Waiting for the
-        // browser…") is a status line, not a refusal: shown as the notice it would
-        // claim a sign-in is open for this row, and outlive the other one's Cancel.
         if self.reauthing.is_some() || self.profile_in_use(account_id) {
             return Err(cutix_i18n::t("youtube.accounts.busy"));
         }
@@ -957,22 +919,15 @@ impl Youtube {
         Ok(cancel)
     }
 
-    /// Releases the claim [`begin_reauth`] made — only if it is still this account's.
-    ///
-    /// [`begin_reauth`]: Youtube::begin_reauth
     pub fn end_reauth(&mut self, account_id: &str) {
         if self.is_reauthing(account_id) {
             self.reauthing = None;
-            // A refusal that pointed at this sign-in ("wait for it to finish") has
-            // nothing left to wait for. A cancelled sign-in reports nothing else, so
-            // the notice would otherwise sit there until some unrelated action.
             if self.notice.as_deref() == Some(cutix_i18n::t("youtube.accounts.busy").as_str()) {
                 self.notice = None;
             }
         }
     }
 
-    /// Asks the open re-authorisation of this account to stop.
     pub fn cancel_reauth(&self, account_id: &str) {
         if let Some(reauthing) = self
             .reauthing
@@ -985,10 +940,6 @@ impl Youtube {
         }
     }
 
-    /// Folds a finished re-authorisation into its row and puts the uploads that stalled
-    /// on the dead session back in line.
-    ///
-    /// Returns `false`, touching nothing, when the row was removed in the meantime.
     pub fn reauthorised(
         &mut self,
         fresh: youtube::Account,
@@ -1002,12 +953,8 @@ impl Youtube {
         if let Some(bytes) = avatar {
             self.store_avatar(&id, &bytes);
         }
-        // Whatever the last fetch could not find may render now that the session works.
         self.refresh_tried.retain(|tried| *tried != id);
 
-        // Uploads that stalled on this account's session going stale pick back up on
-        // their own — the whole point of fixing the account in place is that nothing
-        // queued for it was lost.
         let stalled: Vec<String> = self
             .queue
             .tasks
@@ -1026,8 +973,6 @@ impl Youtube {
         true
     }
 
-    /// The oldest waiting upload that can start now: nothing else of its account's is
-    /// running, and no sign-in or refresh has that account's profile open.
     pub fn next_startable(&self) -> Option<Task> {
         self.queue
             .visible()
@@ -1043,11 +988,6 @@ impl Youtube {
             .cloned()
     }
 
-    /// Stops, without opening a browser, every waiting upload whose account is known to
-    /// be signed out, returning whether there was any.
-    ///
-    /// Each would only start a browser to find the same dead session. As failed-for-auth
-    /// rows they say "sign in again", and finishing that sign-in puts them back.
     pub fn fail_stale_sessions(&mut self) -> bool {
         let stale: Vec<String> = self
             .queue
@@ -1069,9 +1009,6 @@ impl Youtube {
         !stale.is_empty()
     }
 
-    /// The account whose name or avatar is still missing and worth one headless fetch:
-    /// the active one first. Not one whose session is known dead, not one fetched
-    /// already this run, and not one whose profile is open elsewhere.
     pub fn account_to_refresh(&self) -> Option<String> {
         if self.refreshing.is_some() {
             return None;
@@ -1226,8 +1163,6 @@ impl Youtube {
     }
 
     pub fn remove_account(&mut self, account_id: &str) {
-        // A browser has the profile open: deleting it underneath leaves half a profile
-        // on disk, and a sign-in that finishes afterwards would bring the row back.
         if self.profile_in_use(account_id) {
             self.notice = Some(cutix_i18n::t("youtube.accounts.busy"));
             return;
@@ -1414,7 +1349,6 @@ mod tests {
     #[test]
     fn an_empty_filter_edge_opens_on_today_even_in_the_last_hour_of_the_day() {
         let moscow = Zone::Fixed(3 * 3_600);
-        // 23:30 in Moscow on the 23rd: the proposed schedule would already be the 24th.
         let late = unix_from_civil(2026, 9, 23, 20, 30);
         assert_eq!(Scheduled::soon(late, moscow).day, 24);
 
@@ -1494,7 +1428,6 @@ mod tests {
         );
         assert!(state.is_reauthing("UCa"));
 
-        // The caller shows the refusal.
         state.notice = Some(refusal);
         state.end_reauth("UCb");
         state.cancel_reauth("UCb");
@@ -1505,8 +1438,6 @@ mod tests {
         assert!(state.notice.is_some(), "and takes no notice down");
         assert!(!cancel.load(std::sync::atomic::Ordering::Relaxed));
 
-        // The first sign-in being cancelled reports nothing of its own, so ending it
-        // is what takes the stale refusal down.
         state.cancel_reauth("UCa");
         assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
         state.end_reauth("UCa");

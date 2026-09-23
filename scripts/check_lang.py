@@ -1,17 +1,3 @@
-# Checks the translations in lang/ without changing anything.
-#
-#   python scripts/check_lang.py
-#
-# - every locale has exactly the key set of en.json, with no empty values;
-# - each translation uses the same {placeholders} as its English string;
-# - every file is laid out the canonical way: keys sorted, two-space indent,
-#   raw UTF-8 rather than \u escapes, one trailing newline (CRLF or LF);
-# - lang/index.json lists every locale with its real key count and name;
-# - every key passed as a string literal to t("...") / t_args("...", ...) in
-#   apps/native/src and crates/*/src exists in en.json. Keys built at runtime,
-#   such as t(&format!(...)), are not literals and are skipped.
-#
-# Exits 1 and lists each problem when anything is off, 0 otherwise.
 import io
 import json
 import os
@@ -24,7 +10,6 @@ BASE = "en"
 MANIFEST = "index.json"
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 CALL = re.compile(r'(?<![\w.])(?:t!?|t_args)\s*\(\s*"((?:[^"\\]|\\.)*)"')
-
 
 def strip_comments(text):
     """Blank out Rust comments, keeping strings intact and line numbers stable."""
@@ -93,10 +78,8 @@ def strip_comments(text):
         index += 1
     return "".join(out)
 
-
 def canonical(data, sort):
     return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=sort) + "\n"
-
 
 def load_locales(problems):
     locales = {}
@@ -125,7 +108,6 @@ def load_locales(problems):
         locales[code] = data
     return locales
 
-
 def check_locales(locales, problems):
     base = locales[BASE]
     base_keys = set(base)
@@ -152,12 +134,10 @@ def check_locales(locales, problems):
                     % (name, key, sorted(found), BASE, sorted(expected))
                 )
 
-
 def key_count(data):
     return sum(
         1 for key, value in data.items() if not key.startswith("$") and isinstance(value, str)
     )
-
 
 def check_manifest(locales, problems):
     path = os.path.join(LANG, MANIFEST)
@@ -192,7 +172,6 @@ def check_manifest(locales, problems):
     for code in sorted(set(locales) - listed):
         problems.append("%s: does not list %s" % (MANIFEST, code))
 
-
 def sources():
     roots = [os.path.join(ROOT, "apps", "native", "src")]
     crates = os.path.join(ROOT, "crates")
@@ -204,7 +183,6 @@ def sources():
             for name in sorted(names):
                 if name.endswith(".rs"):
                     yield os.path.join(base, name)
-
 
 def check_sources(base, problems):
     used = 0
@@ -223,7 +201,6 @@ def check_sources(base, problems):
                 problems.append("%s:%d: %s is not in %s.json" % (relative, line, key, BASE))
         files += found
     return used, files
-
 
 def main():
     if hasattr(sys.stdout, "reconfigure"):
@@ -252,6 +229,5 @@ def main():
         )
     )
     return 1 if problems else 0
-
 
 sys.exit(main())

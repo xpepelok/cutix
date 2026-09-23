@@ -1,5 +1,3 @@
-//! The editor's own tests.
-
 use super::*;
 
 #[cfg(test)]

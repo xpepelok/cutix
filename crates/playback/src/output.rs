@@ -53,16 +53,11 @@ impl Ring {
         (self.mask + 1) - self.occupancy()
     }
 
-    /// Sample-granular push, for tests that exercise the ring itself.
     #[cfg(test)]
     fn push(&self, samples: &[f32]) -> usize {
         self.push_frames(samples, 1)
     }
 
-    /// Accepts as many whole interleaved frames of `channels` samples as fit.
-    ///
-    /// A partial frame would shift every later sample by one slot, so on a full ring
-    /// stereo playback would come out with left and right swapped from then on.
     fn push_frames(&self, samples: &[f32], channels: usize) -> usize {
         let channels = channels.max(1);
         let mut written = self.written.load(Ordering::Relaxed);
@@ -314,8 +309,6 @@ mod tests {
     fn a_full_ring_accepts_only_whole_frames() {
         let ring = Ring::new(8);
         assert_eq!(ring.push_frames(&[0.0; 5], 1), 5);
-        // Three slots are free; a stereo push must stop at one whole frame, not three
-        // samples, or every later left sample would land in a right slot.
         assert_eq!(ring.push_frames(&[1.0, 2.0, 3.0, 4.0], 2), 2);
         assert_eq!(ring.len(), 7);
         assert_eq!(ring.push_frames(&[5.0, 6.0], 2), 0);

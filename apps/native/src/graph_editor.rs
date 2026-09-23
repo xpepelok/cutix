@@ -270,7 +270,6 @@ pub struct CurvePatch {
     pub right_handle: Option<Option<Handle>>,
 }
 
-/// One end of a keyframe segment: which keyframe it is, when, and at what value.
 #[derive(Clone, Copy, Debug)]
 pub struct SegmentEnd<'id> {
     pub keyframe_id: &'id str,
@@ -397,16 +396,13 @@ pub fn drag_keyframe(
     (tick, value)
 }
 
-/// A segment between two keyframes, with the easing that joins them.
 #[derive(Clone, Copy, Debug)]
 pub struct Segment {
     pub left_tick: i64,
     pub left_value: f64,
     pub right_tick: i64,
     pub right_value: f64,
-    /// The handle leaving the left keyframe, for a bezier segment.
     pub left_right_handle: Option<Handle>,
-    /// The handle arriving at the right keyframe, for a bezier segment.
     pub right_left_handle: Option<Handle>,
 }
 

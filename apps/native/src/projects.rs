@@ -1274,7 +1274,6 @@ impl ProjectsView {
                 .flex()
                 .items_center()
                 .gap(px(10.0))
-                // Lines up with the toolbar and the grid cards, both 32 px in.
                 .mx(px(32.0))
                 .mb(px(12.0))
                 .px(px(14.0))

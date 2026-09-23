@@ -20,11 +20,7 @@ const UPDATE_PILL_ID: &str = "titlebar-update";
 const UPDATE_DISMISS_ID: &str = "titlebar-update-dismiss";
 const UPDATE_PILL_HEIGHT: f32 = 22.0;
 const UPDATE_PROGRESS_POLL: Duration = Duration::from_millis(120);
-/// How often an installed update looks whether the export or upload it waits for
-/// has finished.
 const UPDATE_IDLE_POLL: Duration = Duration::from_secs(2);
-/// How long the pill's tooltip explains a refused click before it goes back to
-/// its usual hint.
 const UPDATE_BUSY_NOTICE: Duration = Duration::from_secs(4);
 
 pub struct Titlebar {
@@ -33,7 +29,6 @@ pub struct Titlebar {
     tooltips: Tooltips,
     update_dir: Option<PathBuf>,
     update: update::Shared,
-    /// When a click on the pill was refused because something was still running.
     update_refused_at: Option<Instant>,
 }
 
@@ -55,14 +50,10 @@ impl Titlebar {
         }
     }
 
-    /// Whether restarting now would cut something off: an export writing its file,
-    /// an upload, or a sign-in with a browser open. The YouTube state lives in the
-    /// assets panel, which publishes what it is doing through the render flags.
     fn work_in_progress(&self, cx: &Context<Self>) -> bool {
         self.app.read(cx).export.is_running() || crate::youtube_ui::render::busy()
     }
 
-    /// Keeps the pill where it is and lets its tooltip say why the click did nothing.
     fn refuse_update(&mut self, cx: &mut Context<Self>) {
         self.update_refused_at = Some(Instant::now());
         cx.notify();
@@ -86,7 +77,6 @@ impl Titlebar {
         }
     }
 
-    /// Checks for a newer release shortly after start and then every few hours.
     fn watch_releases(shared: update::Shared, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -126,8 +116,6 @@ impl Titlebar {
         .detach();
     }
 
-    /// Downloads and installs the pending release, then restarts into it — once
-    /// nothing that a restart would cut short is running.
     fn install_update(&mut self, cx: &mut Context<Self>) {
         let Some(dir) = self.update_dir.clone() else {
             return;
@@ -144,8 +132,6 @@ impl Titlebar {
             }
             Phase::Idle | Phase::Installing { .. } | Phase::Restarting => return,
         };
-        // An export or upload started now would be killed by the restart at the end
-        // of the download, so the whole thing waits rather than only the restart.
         if self.work_in_progress(cx) {
             self.refuse_update(cx);
             return;
@@ -190,8 +176,6 @@ impl Titlebar {
 
             let _ = this.update(cx, |this, cx| {
                 match outcome {
-                    // The download took a while: an export or upload may have started
-                    // meanwhile, and the new files can wait in place for it.
                     Ok(exe) if this.work_in_progress(cx) => {
                         this.set_phase(Phase::ReadyToRestart { release, exe });
                         this.restart_when_idle(cx);
@@ -205,7 +189,6 @@ impl Titlebar {
         .detach();
     }
 
-    /// Saves and starts the installed executable; this process quits once it is up.
     fn restart_into(&mut self, release: update::Release, exe: PathBuf, cx: &mut Context<Self>) {
         self.set_phase(Phase::Restarting);
         self.tooltips.dismiss();
@@ -217,8 +200,6 @@ impl Titlebar {
         cx.notify();
     }
 
-    /// Restarts on its own once the export or upload an installed update waited
-    /// for is over — or stops watching when a click got there first.
     fn restart_when_idle(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(UPDATE_IDLE_POLL).await;
@@ -239,7 +220,6 @@ impl Titlebar {
         .detach();
     }
 
-    /// Puts a failed update away for this session; the next check offers it afresh.
     fn dismiss_failed_update(&mut self, cx: &mut Context<Self>) {
         if matches!(self.phase(), Phase::Failed { .. }) {
             self.set_phase(Phase::Idle);
@@ -255,7 +235,6 @@ impl Titlebar {
             Phase::Idle => return None,
             Phase::Available(release) => (
                 t_args("update.available", &[("version", &release.label())]),
-                // A tray-and-arrow reads as "download"; a bare chevron reads as a menu.
                 Some("download04"),
                 Some(t("update.availableHint")),
                 None,
@@ -274,7 +253,6 @@ impl Titlebar {
             Phase::Restarting => (t("update.restarting"), None, None, Some(1.0), false),
             Phase::ReadyToRestart { .. } => (
                 t("update.ready"),
-                // The same arrow, now pointing at a restart rather than a download.
                 Some("download04"),
                 Some(t("update.readyHint")),
                 None,
@@ -288,7 +266,6 @@ impl Titlebar {
                 true,
             ),
         };
-        // A refused click borrows the tooltip for a moment to say what to finish first.
         let tooltip = if self.busy_notice_showing() && tooltip.is_some() {
             Some(t("update.busy"))
         } else {
@@ -306,8 +283,6 @@ impl Titlebar {
         } else {
             colors.primary
         };
-        // The label takes the palette's blue meant for text on a blue tint: primary
-        // itself is too light to read at this size on the light theme.
         let ink = if failed {
             colors.destructive
         } else {
@@ -355,8 +330,6 @@ impl Titlebar {
         }
         pill = pill.child(div().relative().child(label));
         if failed {
-            // A failure that keeps failing should not sit in the titlebar all session:
-            // the cross puts it away, while the pill itself still retries.
             pill = pill.child(
                 div()
                     .id(UPDATE_DISMISS_ID)

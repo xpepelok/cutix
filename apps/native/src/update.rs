@@ -1,26 +1,3 @@
-//! Self-update from GitHub releases.
-//!
-//! Only an unpacked release copy updates itself: the directory holding the executable
-//! must also hold `lang/`, it must not live in the Nix store, and a debug build never
-//! replaces itself unless `CUTIX_FORCE_UPDATES` is set. `CUTIX_DISABLE_UPDATES` turns
-//! the whole thing off.
-//!
-//! To exercise the titlebar pill from a debug build, put `lang/` next to the executable
-//! and start it with `CUTIX_FORCE_UPDATES=1 CUTIX_FAKE_VERSION=0.0.1`: the build then
-//! reports itself as that version, so the latest release looks newer. Release builds
-//! ignore `CUTIX_FAKE_VERSION`.
-//!
-//! Installing swaps files in place. A running executable (or a loaded DLL) cannot be
-//! overwritten on Windows but it can be renamed, so every file that is replaced is
-//! first moved aside to `<name>.old`, the new one is moved in, and the renamed files
-//! are listed in `.cutix-leftovers` for the next start to delete. Any failure halfway
-//! puts the renamed files back.
-//!
-//! While an install runs, `.cutix-update/lock` is held open (exclusively on Windows;
-//! with the owner's pid elsewhere), so a second cutix started meanwhile — Explorer's
-//! "Publish", a double-clicked video — leaves the work directory alone instead of
-//! deleting it from under the download.
-
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -49,8 +26,6 @@ const EXECUTABLE: &str = "cutix.exe";
 #[cfg(not(windows))]
 const EXECUTABLE: &str = "cutix";
 
-/// The version releases are compared against. Debug builds take `CUTIX_FAKE_VERSION`
-/// instead when it is set, so an update can be offered without cutting a release.
 pub fn current_version() -> &'static str {
     if cfg!(debug_assertions) {
         static FAKE: OnceLock<Option<String>> = OnceLock::new();
@@ -76,7 +51,6 @@ pub struct Release {
 }
 
 impl Release {
-    /// The tag as shown to people, always with a leading `v`.
     pub fn label(&self) -> String {
         let bare = self.tag.trim_start_matches(['v', 'V']);
         format!("v{bare}")
@@ -112,8 +86,6 @@ pub enum Phase {
         progress: f32,
     },
     Restarting,
-    /// The new files are in place, but an export or an upload is still running: the
-    /// restart waits for it (or for a click) rather than cutting it off.
     ReadyToRestart {
         release: Release,
         exe: PathBuf,
@@ -132,9 +104,6 @@ impl Phase {
 
 pub type Shared = Arc<Mutex<Phase>>;
 
-// ---------------------------------------------------------------------------------
-// Eligibility
-
 fn env_set(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
@@ -145,9 +114,6 @@ fn in_nix_store(path: &Path) -> bool {
         .starts_with("/nix/store/")
 }
 
-/// Whether files can be created in `dir`: a copy unpacked by an administrator under
-/// `Program Files` or `/opt` looks like an install but cannot take an update, and
-/// offering one would only ever end in "Update failed".
 pub fn writable(dir: &Path) -> bool {
     let probe = dir.join(PROBE_FILE);
     let created = fs::OpenOptions::new()
@@ -160,7 +126,6 @@ pub fn writable(dir: &Path) -> bool {
     created
 }
 
-/// The directory of the running executable, when this copy may update itself.
 pub fn install_dir() -> Option<PathBuf> {
     if env_set("CUTIX_DISABLE_UPDATES") {
         return None;
@@ -177,10 +142,6 @@ pub fn install_dir() -> Option<PathBuf> {
     (dir.join("lang").is_dir() && writable(&dir)).then_some(dir)
 }
 
-/// The release archive for a platform. There is no NixOS variant on purpose: the
-/// `cutix-nixos-*` tarball holds a wrapper script pointing into the CI's `/nix/store`,
-/// and the only NixOS copies that can update at all are generic builds run outside
-/// the store (`install_dir` rules the store out), which need the generic tarball.
 pub fn asset_for(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("windows", "x86_64") => Some("cutix-windows-x64.zip"),
@@ -195,10 +156,6 @@ fn platform_asset() -> Option<&'static str> {
     asset_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-// ---------------------------------------------------------------------------------
-// Versions and release metadata
-
-/// Numeric components of a version such as `v1.2.3-beta`; the suffix is ignored.
 pub fn parse_version(text: &str) -> Option<Vec<u64>> {
     let core = text
         .trim()
@@ -229,7 +186,6 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     false
 }
 
-/// The sha256 listed for `file` in a `sha256sum`-style listing.
 pub fn checksum_for(listing: &str, file: &str) -> Option<String> {
     listing.lines().find_map(|line| {
         let mut parts = line.split_whitespace();
@@ -258,8 +214,6 @@ struct ApiAsset {
     browser_download_url: String,
 }
 
-/// The release described by a `releases/latest` payload, when it is newer than
-/// `current` and carries both the archive for `asset` and the checksum listing.
 pub fn pick_release(payload: &str, current: &str, asset: &str) -> Option<Release> {
     let release: ApiRelease = serde_json::from_str(payload).ok()?;
     if release.draft || release.prerelease || !is_newer(&release.tag_name, current) {
@@ -279,9 +233,6 @@ pub fn pick_release(payload: &str, current: &str, asset: &str) -> Option<Release
         tag: release.tag_name,
     })
 }
-
-// ---------------------------------------------------------------------------------
-// Network
 
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
@@ -306,7 +257,6 @@ fn fetch_text(agent: &ureq::Agent, url: &str) -> Result<String, UpdateError> {
     Ok(text)
 }
 
-/// Asks GitHub whether a newer release exists for this platform.
 pub fn check() -> Result<Option<Release>, UpdateError> {
     let Some(asset) = platform_asset() else {
         return Ok(None);
@@ -320,7 +270,6 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Streams `url` into `path`, returning the sha256 of what was written.
 fn download(
     agent: &ureq::Agent,
     url: &str,
@@ -359,12 +308,6 @@ fn download(
     Ok(hex(&hasher.finalize()))
 }
 
-// ---------------------------------------------------------------------------------
-// Archives
-
-/// The relative path an archive entry may be unpacked to. `Ok(None)` is an entry that
-/// names the archive root itself (`./`); an absolute path, a drive prefix or a `..`
-/// component is refused outright.
 pub fn entry_path(name: &str) -> Result<Option<PathBuf>, UpdateError> {
     if name.starts_with('/') || name.starts_with('\\') {
         return Err(UpdateError::Archive);
@@ -417,7 +360,6 @@ fn write_entry(
     Ok(())
 }
 
-/// Unpacks a zip into `dest`, returning the files it wrote.
 fn unzip(archive: &Path, dest: &Path) -> Result<Vec<PathBuf>, UpdateError> {
     let file = fs::File::open(archive).map_err(|_| UpdateError::Archive)?;
     let mut zip =
@@ -458,7 +400,6 @@ fn read_block(reader: &mut impl Read, block: &mut [u8; 512]) -> Result<bool, Upd
 
 fn tar_number(field: &[u8]) -> Result<u64, UpdateError> {
     if field.first().is_some_and(|byte| byte & 0x80 != 0) {
-        // GNU base-256: big-endian, the marker bit cleared.
         let mut value = u64::from(field[0] & 0x7f);
         for byte in &field[1..] {
             value = value
@@ -501,8 +442,6 @@ fn pax_path(records: &[u8]) -> Option<String> {
     })
 }
 
-/// A small ustar/GNU/pax reader: regular files and directories only; links and
-/// devices are skipped. Returns the files it wrote.
 fn untar(mut reader: impl Read, dest: &Path) -> Result<Vec<PathBuf>, UpdateError> {
     let mut header = [0u8; 512];
     let mut long_name: Option<String> = None;
@@ -533,8 +472,6 @@ fn untar(mut reader: impl Read, dest: &Path) -> Result<Vec<PathBuf>, UpdateError
         let name = long_name.take().unwrap_or_else(|| {
             let name = tar_text(&header[0..100]);
             let prefix = tar_text(&header[345..500]);
-            // Only POSIX ustar (`ustar\0`) keeps a path prefix at 345. GNU tar's magic
-            // is `ustar  \0`, and the same bytes hold its atime/ctime and sparse map.
             if &header[257..263] == b"ustar\0" && !prefix.is_empty() {
                 format!("{prefix}/{name}")
             } else {
@@ -587,7 +524,6 @@ fn untar(mut reader: impl Read, dest: &Path) -> Result<Vec<PathBuf>, UpdateError
     }
 }
 
-/// Unpacks `archive` into `dest`, returning the files it wrote.
 fn extract(archive: &Path, dest: &Path) -> Result<Vec<PathBuf>, UpdateError> {
     let name = archive
         .file_name()
@@ -603,10 +539,6 @@ fn extract(archive: &Path, dest: &Path) -> Result<Vec<PathBuf>, UpdateError> {
     }
 }
 
-/// The files under `staged`, checked against what the archive `written`: anything
-/// missing means something else emptied the work directory between unpacking and
-/// swapping, and a half-staged set must never be swapped in (the new executable with
-/// the old `lang/` would look like a clean install).
 fn verify_staged(staged: &Path, written: &[PathBuf]) -> Result<Vec<PathBuf>, UpdateError> {
     let mut expected = written.to_vec();
     expected.sort();
@@ -640,16 +572,12 @@ fn staged_files(root: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(found)
 }
 
-// ---------------------------------------------------------------------------------
-// Swapping files and leftovers
-
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(suffix);
     path.with_file_name(name)
 }
 
-/// A free `<name>.old` (or `.old1`…) next to `target`.
 fn aside_name(target: &Path) -> Option<PathBuf> {
     (0..16).find_map(|index| {
         let suffix = if index == 0 {
@@ -682,8 +610,6 @@ fn leftover_line(path: &Path) -> String {
         .join("/")
 }
 
-/// Leftovers recorded in `dir`; lines that are not a safe relative `*.old` path are
-/// dropped so the list can never point outside the install directory.
 pub fn read_leftovers(dir: &Path) -> Vec<PathBuf> {
     let Ok(text) = fs::read_to_string(dir.join(LEFTOVERS_FILE)) else {
         return Vec::new();
@@ -710,8 +636,6 @@ pub fn write_leftovers(dir: &Path, leftovers: &[PathBuf]) -> io::Result<()> {
     fs::write(file, text)
 }
 
-/// Deletes the recorded leftovers, keeping the ones that are still locked on the
-/// list. Returns how many remain.
 pub fn remove_leftovers(dir: &Path) -> usize {
     let remaining: Vec<PathBuf> = read_leftovers(dir)
         .into_iter()
@@ -744,8 +668,6 @@ fn roll_back(swaps: &[Swap]) {
     }
 }
 
-/// Moves every staged file over its counterpart in `dir`. On failure everything is
-/// put back and nothing is recorded.
 fn swap_in(staged: &Path, dir: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>, UpdateError> {
     let mut swaps: Vec<Swap> = Vec::new();
     let result = (|| {
@@ -798,10 +720,6 @@ fn swap_in(staged: &Path, dir: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>,
     Ok(leftovers)
 }
 
-// ---------------------------------------------------------------------------------
-// The install lock
-
-/// Marks `work` as belonging to a running install for as long as it is held.
 struct InstallLock {
     _file: fs::File,
 }
@@ -810,27 +728,22 @@ fn lock_path(work: &Path) -> PathBuf {
     work.join(LOCK_FILE)
 }
 
-/// Takes the lock for `work`, which must exist.
 fn lock_install(work: &Path) -> Result<InstallLock, UpdateError> {
     let path = lock_path(work);
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
-    // Sharing nothing is the lock itself: no other process can open or delete the
-    // file while this handle is alive, and `remove_dir_all` fails on it.
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
         options.share_mode(0);
     }
     let mut file = options.open(&path).map_err(|_| UpdateError::Install)?;
-    // Elsewhere the owner's pid is the lock: another instance checks it is alive.
     file.write_all(std::process::id().to_string().as_bytes())
         .map_err(|_| UpdateError::Install)?;
     file.flush().map_err(|_| UpdateError::Install)?;
     Ok(InstallLock { _file: file })
 }
 
-/// Whether another cutix is installing into `work` right now.
 fn install_locked(work: &Path) -> bool {
     let path = lock_path(work);
     #[cfg(windows)]
@@ -853,11 +766,6 @@ fn install_locked(work: &Path) -> bool {
     }
 }
 
-// ---------------------------------------------------------------------------------
-// Installing
-
-/// Downloads, verifies and installs `release` into `dir`. Returns the executable to
-/// start; the caller restarts into it once nothing else is running.
 pub fn install(
     dir: &Path,
     release: &Release,
@@ -890,13 +798,11 @@ pub fn install(
         Ok(dir.join(EXECUTABLE))
     })();
 
-    // The open lock file would keep the directory alive on Windows.
     drop(lock);
     let _ = fs::remove_dir_all(&work);
     result
 }
 
-/// Starts the freshly installed executable.
 pub fn relaunch(exe: &Path) -> Result<(), UpdateError> {
     let mut command = std::process::Command::new(exe);
     command.arg(UPDATED_FLAG);
@@ -909,9 +815,6 @@ pub fn relaunch(exe: &Path) -> Result<(), UpdateError> {
         .map_err(|_| UpdateError::Install)
 }
 
-/// Drops what a previous update left behind in `dir` — unless another instance is
-/// installing there right now, whose work directory stays. Returns how many leftovers
-/// are still locked.
 fn clean_up_in(dir: &Path) -> usize {
     let work = dir.join(WORK_DIR);
     if !install_locked(&work) {
@@ -920,9 +823,6 @@ fn clean_up_in(dir: &Path) -> usize {
     remove_leftovers(dir)
 }
 
-/// Run once at startup: drops what a previous update left behind. After a restart the
-/// old process may still hold its executable for a moment, so the deletion is retried
-/// in the background for a while.
 pub fn clean_up() {
     let Some(dir) = std::env::current_exe()
         .ok()
@@ -1054,7 +954,6 @@ mod tests {
         let written = vec![
             PathBuf::from("lang").join("en.json"),
             PathBuf::from(EXECUTABLE),
-            // The same entry twice in an archive is still one staged file.
             PathBuf::from(EXECUTABLE),
         ];
         assert_eq!(
@@ -1197,7 +1096,6 @@ mod tests {
         fs::write(staged.join("a"), b"new a").expect("a");
         fs::write(dir.path().join("a"), b"old a").expect("old a");
 
-        // `b` is listed but was never staged, so moving it in fails after `a` moved.
         let files = vec![PathBuf::from("a"), PathBuf::from("b")];
         assert_eq!(
             swap_in(&staged, dir.path(), &files),
@@ -1241,7 +1139,6 @@ mod tests {
         let mut posix = tar_header("en.json", b'0', 2);
         posix[345..349].copy_from_slice(b"lang");
         tar_entry_with(&mut archive, checksummed(posix), b"{}");
-        // A GNU header keeps its atime where ustar keeps the prefix.
         let mut gnu = tar_header("cutix", b'0', 3);
         gnu[257..265].copy_from_slice(b"ustar  \0");
         gnu[345..357].copy_from_slice(b"14721234567\0");

@@ -60,11 +60,6 @@ impl Session {
         login::sign_out(&mut self.connection, &self.page)
     }
 
-    /// Drops every cookie the profile holds, which ends every Google session in it at
-    /// once — the next sign-in page starts from nothing, with no account to be sent
-    /// straight past. Unlike [`sign_out`], it needs nothing from Google's pages.
-    ///
-    /// [`sign_out`]: Session::sign_out
     pub fn clear_cookies(&mut self) -> Result<(), Failure> {
         self.page.call(
             &mut self.connection,
@@ -169,13 +164,6 @@ pub fn sign_in(
     ))
 }
 
-/// Re-authenticates an account whose session has gone stale, in its own existing
-/// profile directory rather than a fresh scratch one.
-///
-/// Unlike [`sign_in`], the account id is never re-derived from the channel the
-/// browser lands on: it stays exactly what was passed in. That is what lets a
-/// caller refresh an account in place — no profile move, no new id — so every
-/// queued or history row still keyed to that id stays linked to it.
 pub fn reauth(
     data_directory: &Path,
     account_id: &str,
@@ -194,8 +182,6 @@ pub fn reauth(
             login::watch_for_sign_in(port, &mut open).map(drop)
         }
     };
-    // The watch cannot tell a closed window from a pressed Cancel, and reports both as
-    // an abandoned sign-in. An explicit cancel is not a failure worth showing.
     if !still_open() {
         return Err(Failure::Cancelled);
     }
@@ -211,13 +197,6 @@ pub fn reauth(
         page,
     };
 
-    // Keeping the id means trusting that it still names the channel behind these
-    // cookies. Signing in as someone else would otherwise leave every queued task
-    // pointing at this row while the uploads went to a different channel.
-    //
-    // The channel's own page is asked for rather than bare Studio: a Google account that
-    // manages brand channels lands on its default one there, so a brand channel could
-    // never pass this check otherwise.
     let landed = login::wait_for_channel_at(
         &mut session.connection,
         &session.page,
@@ -236,13 +215,6 @@ pub fn reauth(
     };
     if signed_in != account_id {
         let landed = session.decorations().title;
-        // The session that was picked by mistake cannot stay: with its cookies in the
-        // profile, the next "Sign in again" would be forwarded straight to Studio and
-        // land on the same wrong channel within seconds, with no chance to choose
-        // another account. Nothing of value goes with it — this profile belongs to
-        // this one row, and its own session was already dead. The cookie wipe cannot
-        // be told "no" by a page; Google's sign-out is the fallback if DevTools
-        // refuses the call.
         if session.clear_cookies().is_err() {
             let _ = session.sign_out();
         }
@@ -267,8 +239,6 @@ pub fn reauth(
         }
     }
     session.close();
-    // A cancel pressed after the channel checked out still wins: the row is only
-    // brought back to life by a re-authorisation the person let finish.
     if !still_open() {
         return Err(Failure::Cancelled);
     }
@@ -291,18 +261,10 @@ pub fn reauth(
 const DECORATION_ATTEMPTS: usize = 15;
 const DECORATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// What a studio page tells us about the signed-in channel.
-///
-/// Every text field may come back empty when the page has not finished rendering, so a
-/// caller keeps whatever it already knew rather than overwriting it with a blank.
 pub struct ChannelDecorations {
-    /// The channel's display name.
     pub title: String,
-    /// The channel's handle, including the leading `@`.
     pub handle: String,
-    /// Where the avatar is served from.
     pub avatar_url: String,
-    /// The avatar image bytes, when the page served them directly.
     pub avatar: Option<Vec<u8>>,
 }
 

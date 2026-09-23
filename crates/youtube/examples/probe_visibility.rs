@@ -103,9 +103,6 @@ fn main() {
          n.tagName.toLowerCase() + ' checked=' + n.getAttribute('aria-checked') : 'absent'; })()",
     );
 
-    // What `studio::schedule` types into and reads back. It fails the upload when the
-    // date or time it reads back is not the one it typed, so a selector that has drifted
-    // shows up here first.
     let _ = page.click(&mut connection, css::SCHEDULE_TOGGLE);
     std::thread::sleep(std::time::Duration::from_millis(1500));
     let field = |selector: &str| {

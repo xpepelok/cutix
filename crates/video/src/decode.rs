@@ -261,7 +261,6 @@ pub fn frame_at_with_color(
         .map(|track| half_nominal_frame(track.duration().as_secs_f64(), sample_count))
         .unwrap_or(0.0);
 
-    // Samples are read lazily, and the pick stops at the first one past the target.
     let samples = (1..=sample_count).filter_map(|index| {
         let sample = mp4.read_sample(track_id, index).ok().flatten()?;
         Some((index, sample.start_time, sample.is_sync))
@@ -318,8 +317,6 @@ struct SampleEntry {
     is_sync: bool,
 }
 
-/// Half a frame at the track's average rate: how far ahead of a time the nearest-frame
-/// pick may reach. Zero, which always keeps the floor, when the rate is unknown.
 pub(crate) fn half_nominal_frame(duration_seconds: f64, frame_count: u32) -> f64 {
     if duration_seconds > 0.0 && frame_count > 0 {
         0.5 * duration_seconds / f64::from(frame_count)
@@ -328,24 +325,10 @@ pub(crate) fn half_nominal_frame(duration_seconds: f64, frame_count: u32) -> f64
     }
 }
 
-/// Whether the frame starting at `next` is shown at `target` instead of the one at `floor`.
-///
-/// Taking the last frame at or before `target` is only right when the source and the
-/// timeline tick together. A variable-rate recording (ShadowPlay, phone cameras) has frame
-/// starts that wander around the timeline's, and a floor then shows one frame twice and
-/// skips the next whenever a start lands a hair after a timeline tick. So the next frame
-/// wins when it is strictly nearer, ties keeping the earlier one.
-///
-/// It must also be within `max_lead` (half a nominal frame) of the target. The jitter
-/// being absorbed is a fraction of a frame; across a real gap in a sparse recording (a
-/// static screen, then a click at 4.0 s) the nearer frame can be most of a second away,
-/// and showing it early would put the picture ahead of its sound.
 pub(crate) fn next_frame_is_nearer(target: f64, floor: f64, next: f64, max_lead: f64) -> bool {
     floor <= target && next - target < (target - floor).min(max_lead)
 }
 
-/// The 1-based sample shown at `seconds`: the floor, or the one after it when
-/// [`next_frame_is_nearer`] says so.
 fn nearest_sample(index: &[SampleEntry], seconds: f64, max_lead: f64) -> usize {
     let floor = index.partition_point(|entry| entry.start_seconds <= seconds);
     if floor == 0 {
@@ -366,12 +349,6 @@ fn nearest_sample(index: &[SampleEntry], seconds: f64, max_lead: f64) -> usize {
     }
 }
 
-/// The one-shot decode's `(keyframe, target)` samples for `seconds`, from `(index, start
-/// in ticks, is_sync)` in presentation order.
-///
-/// Compares in seconds exactly as [`nearest_sample`] does rather than rounding the target
-/// to ticks, so a still and playback pick the same frame; a rounded target turns a target
-/// just past a midpoint into a tie and keeps the earlier frame instead.
 fn one_shot_samples(
     samples: impl IntoIterator<Item = (u32, u64, bool)>,
     timescale: f64,
@@ -391,7 +368,6 @@ fn one_shot_samples(
             target_start = Some(start);
             continue;
         }
-        // The first sample past the target, served instead when it is the nearer one.
         if let Some(floor) = target_start
             && next_frame_is_nearer(seconds, floor, start, max_lead)
         {
@@ -410,7 +386,6 @@ pub struct NativeStream {
     track_id: u32,
     timescale: f64,
     sample_count: u32,
-    /// Half a frame at the track's average rate; see [`next_frame_is_nearer`].
     max_lead: f64,
     index: Vec<SampleEntry>,
     indexed_through: u32,
@@ -523,7 +498,6 @@ impl NativeStream {
 
     fn sample_for(&mut self, seconds: f64) -> u32 {
         let seconds = seconds.max(0.0);
-        // Covering `seconds` indexes one sample past it, which the nearest pick needs.
         self.index_covering(seconds);
 
         (nearest_sample(&self.index, seconds, self.max_lead) as u32).min(self.sample_count.max(1))
@@ -697,14 +671,11 @@ mod tests {
             .collect()
     }
 
-    /// Half a frame at 60 fps.
     const HALF_60: f64 = 0.5 / 60.0;
 
     #[test]
     fn a_cut_between_frames_takes_the_nearest_one() {
-        // A 60 fps recording whose frames drift a little late against the timeline.
         let index = entries(&[0.0, 0.0172, 0.0339, 0.0505]);
-        // 1/60 s falls just before the second frame; a floor would repeat the first.
         assert_eq!(nearest_sample(&index, 1.0 / 60.0, HALF_60), 2);
         assert_eq!(nearest_sample(&index, 0.0339 + 0.001, HALF_60), 3);
         assert_eq!(nearest_sample(&index, 0.0339 + 0.01, HALF_60), 4);
@@ -727,13 +698,9 @@ mod tests {
 
     #[test]
     fn a_frame_across_a_variable_rate_gap_is_not_shown_early() {
-        // A sparse screen recording averaging 30 fps: a static screen held from 3.0 s,
-        // then a click at 4.0 s. At 3.6 s the click frame is nearer, but showing it
-        // would put the picture 0.4 s ahead of the click's sound.
         let index = entries(&[2.9667, 3.0, 4.0, 4.0333]);
         let half_30 = half_nominal_frame(1.0, 30);
         assert_eq!(nearest_sample(&index, 3.6, half_30), 2);
-        // Within half a frame of it the click frame is still the nearer one.
         assert_eq!(nearest_sample(&index, 3.99, half_30), 3);
     }
 
@@ -747,8 +714,6 @@ mod tests {
 
     #[test]
     fn the_one_shot_decode_picks_the_frame_playback_shows() {
-        // Timescale 1000 with samples at 33 and 51 ticks. 42.2 ticks is nearer 51, but
-        // rounding the target to 42 ticks made it a tie that kept the 33-tick sample.
         let starts = [0u64, 33, 51, 67];
         let timescale = 1_000.0;
         let seconds = 0.0422;
@@ -775,7 +740,6 @@ mod tests {
         let (keyframe, target) =
             one_shot_samples(samples, 1_000.0, 3.6, half_nominal_frame(1.0, 30));
         assert_eq!((keyframe, target), (1, 2));
-        // A step onto a keyframe decodes from that keyframe.
         let (keyframe, target) =
             one_shot_samples(samples, 1_000.0, 3.99, half_nominal_frame(1.0, 30));
         assert_eq!((keyframe, target), (3, 3));

@@ -9,7 +9,6 @@ use crate::mel::{self, CHUNK_FRAMES, CHUNK_SAMPLES, MelExtractor, N_MELS, SAMPLE
 use crate::models::cache_directory;
 use crate::tokenizer::Tokenizer;
 
-/// Whisper always sees 30-second windows; chunk offsets and open-ended segments use it.
 const CHUNK_SECONDS: f64 = 30.0;
 
 pub struct WhisperSpec {
@@ -181,11 +180,6 @@ pub fn timestamp_token_seconds(token: u32, timestamp_begin: u32) -> Option<f64> 
     Some((token - timestamp_begin) as f64 * 0.02)
 }
 
-/// Turns decoded tokens into segments. Whisper normally brackets text with a pair of
-/// timestamps, but it also emits text before the first timestamp, a single shared
-/// timestamp between two segments, or trailing text with no closing timestamp.
-/// None of that is dropped: text runs from the most recent timestamp (or the chunk
-/// start) to the next one (or the chunk end).
 pub fn assemble_segments(
     tokens: &[u32],
     timestamp_begin: u32,
@@ -211,8 +205,6 @@ pub fn assemble_segments(
     for token in tokens {
         match timestamp_token_seconds(*token, timestamp_begin) {
             Some(seconds) => {
-                // An empty buffer means this timestamp opens a segment (or repeats the
-                // closing one); otherwise it closes the text since the last timestamp.
                 if !buffer.is_empty() {
                     flush(&mut buffer, last_timestamp, seconds);
                 }
@@ -452,8 +444,6 @@ pub fn transcribe(
                 *value = f32::MIN;
             }
 
-            // Timestamp mode must open with a timestamp token; letting plain text come
-            // first leaves it without a start time and drifts every later segment.
             if tokens.len() == prompt_length {
                 let text_end = (model.specials.timestamp_begin as usize).min(logits.len());
                 for value in logits[..text_end].iter_mut() {

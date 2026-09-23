@@ -1,5 +1,3 @@
-//! Tracks: what each kind accepts, where an element fits, and how a scene is built.
-
 use super::*;
 
 pub fn track_height(track: &Track) -> f32 {
@@ -127,8 +125,6 @@ pub enum TrackKind {
 }
 
 impl TrackKind {
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn glyph(self) -> &'static str {
         match self {

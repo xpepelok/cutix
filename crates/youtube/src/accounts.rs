@@ -139,12 +139,6 @@ impl Accounts {
         }
     }
 
-    /// Folds a finished re-authorisation into the row it was for.
-    ///
-    /// The page can time out before the channel's name, handle or avatar render, and a
-    /// blank there means "not seen", not "gone", so what the row already knew is kept.
-    /// Returns `false`, changing nothing, when the row was removed while the browser
-    /// was open: bringing it back would resurrect an account the person just removed.
     pub fn reauthorised(&mut self, fresh: Account, now: i64) -> bool {
         let Some(existing) = self
             .accounts

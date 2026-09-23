@@ -125,8 +125,6 @@ impl AssetSource for Icons {
     }
 }
 
-/// Only the tests in this file ask this; compiled for them alone so the shipping
-/// binary does not carry a function nothing calls.
 #[cfg(test)]
 pub fn icon_exists(name: &str) -> bool {
     ICONS.iter().any(|(known, _)| *known == name)

@@ -28,9 +28,6 @@ const FULLSCREEN_QUAD_POSITIONS: [[f32; 2]; 6] = [
     [1.0, 1.0],
 ];
 
-/// Row layout of a texture-to-buffer copy. wgpu requires `bytes_per_row` of such
-/// copies to be a multiple of `COPY_BYTES_PER_ROW_ALIGNMENT` (256), so rows are
-/// padded on the GPU side and the padding is stripped again after mapping.
 #[cfg_attr(not(all(feature = "wasm", target_arch = "wasm32")), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ReadbackLayout {
@@ -54,7 +51,6 @@ impl ReadbackLayout {
         }
     }
 
-    /// Computed in u64 so large frames cannot overflow the u32 multiplication.
     fn buffer_size(&self) -> u64 {
         u64::from(self.padded_bytes_per_row) * u64::from(self.height)
     }
@@ -83,8 +79,6 @@ pub struct GpuContext {
     nearest_sampler: wgpu::Sampler,
     texture_sampler_bind_group_layout: wgpu::BindGroupLayout,
     blit_pipeline: wgpu::RenderPipeline,
-    /// Whether the adapter can copy straight from a canvas into a texture. Only the
-    /// wasm surface path takes that route, so nothing else consults it.
     #[cfg(target_arch = "wasm32")]
     supports_external_texture_copies: bool,
 }
@@ -394,9 +388,6 @@ impl GpuContext {
         let Some(mut config) = surface.get_default_config(&self.adapter, width, height) else {
             return Err(GpuError::UnsupportedSurfaceFormat);
         };
-        // The default config just picks the surface's preferred format (formats[0]);
-        // a surface that also lists our texture format is perfectly usable, so only
-        // reject when it cannot present that format at all.
         let capabilities = surface.get_capabilities(&self.adapter);
         if !capabilities.formats.contains(&self.texture_format) {
             return Err(GpuError::UnsupportedSurfaceFormat);

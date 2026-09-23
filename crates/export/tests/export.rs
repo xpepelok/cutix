@@ -28,8 +28,6 @@ fn ffmpeg_ready() -> bool {
         {
             let bin = entry.path().join("bin");
             if bin.join("ffmpeg.exe").is_file() || bin.join("ffmpeg").is_file() {
-                // Mutating the environment is unsound while another thread may be reading it.
-                // This runs once, before any decoder thread exists.
                 unsafe { std::env::set_var(video::ffmpeg::DIR_ENV, &bin) };
                 break;
             }
@@ -282,7 +280,6 @@ fn an_export_with_a_missing_media_file_is_refused_and_leaves_no_output_behind() 
     let _ = ffmpeg_ready();
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("holes.mp4");
-    // The project uses "gradient", and no resolver knows where that file is.
     let job = request(destination.clone(), 320, 240, project(320, 240, 2.0));
     let cancel = AtomicBool::new(false);
     let error = run(&job, &MediaMap::new(), &cancel, &mut |_| {})
@@ -297,7 +294,6 @@ fn an_export_with_a_missing_media_file_is_refused_and_leaves_no_output_behind() 
     );
 }
 
-/// A file with a PNG name that no decoder accepts.
 fn bogus_png(directory: &std::path::Path) -> PathBuf {
     let path = directory.join("bogus.png");
     std::fs::write(&path, b"this is not a png").expect("write bogus png");
@@ -313,8 +309,6 @@ fn a_file_that_cannot_be_decoded_fails_the_export_and_removes_the_partial_output
     }
     let directory = tempfile::tempdir().expect("tempdir");
     let destination = directory.path().join("undecodable.mp4");
-    // The file exists, so the pre-flight passes and the failure surfaces mid-render,
-    // after the backend has already opened the destination.
     let media = MediaMap::new().with("gradient", bogus_png(directory.path()));
     let job = request(destination.clone(), 320, 240, project(320, 240, 2.0));
     let cancel = AtomicBool::new(false);
@@ -1003,9 +997,6 @@ fn every_quality_preset_changes_the_size_of_what_openh264_produces() {
         sizes.push((quality, size));
     }
 
-    // The quality setting is expressed as a quantiser range, so a higher quality really
-    // does keep more detail. If the setting were being ignored — as a declared bitrate is
-    // in this encoder — every file would come out the same size.
     for pair in sizes.windows(2) {
         let (lower, small) = pair[0];
         let (higher, large) = pair[1];
@@ -1016,8 +1007,6 @@ fn every_quality_preset_changes_the_size_of_what_openh264_produces() {
     }
 }
 
-/// Renders a three second clip that carries both a video and an AAC audio track, so a
-/// trim across it exercises the stream-copy path with real packet boundaries.
 fn rendered_source_with_audio(directory: &std::path::Path) -> PathBuf {
     let destination = directory.join("source-with-audio.mp4");
     let tone = directory.join("tone.wav");
@@ -1057,7 +1046,6 @@ fn rendered_source_with_audio(directory: &std::path::Path) -> PathBuf {
     destination
 }
 
-/// Reads the presentation time of the first sample of each track in an MP4, in seconds.
 fn first_sample_times(path: &std::path::Path) -> Vec<(mp4::TrackType, f64)> {
     let file = std::fs::File::open(path).expect("open the trimmed file");
     let size = file.metadata().expect("file metadata").len();
@@ -1092,9 +1080,6 @@ fn a_trim_inside_an_aac_packet_does_not_copy_audio_from_before_the_cut() {
     let source = rendered_source_with_audio(directory.path());
     let destination = directory.path().join("trimmed-with-audio.mp4");
 
-    // One AAC packet is 1024 samples, about 21.3 ms at 48 kHz. A cut at 1.01 s lands well
-    // inside a packet rather than on its boundary, which is the case that used to copy a
-    // packet starting before the cut and then zero its timestamp.
     let artifacts =
         cutix_export::remux::trim(&source, seconds(1.01), seconds(1.0), true, &destination)
             .expect("the trim ran");
@@ -1122,9 +1107,6 @@ fn a_trim_inside_an_aac_packet_does_not_copy_audio_from_before_the_cut() {
         audio_start >= 0.0,
         "audio starts at {audio_start}s, before the start of the file"
     );
-    // Audio may begin up to one packet late, because the packet straddling the cut is
-    // dropped rather than copied. What it must never do is begin with material from
-    // before the cut, which is what a zeroed straddling packet produces.
     assert!(
         audio_start < packet_seconds * 1.5,
         "audio starts {audio_start}s in, more than the one dropped packet explains"
@@ -1136,7 +1118,6 @@ fn a_trim_inside_an_aac_packet_does_not_copy_audio_from_before_the_cut() {
         "the trimmed audio decoded to near silence: peak {}",
         decoded.peak
     );
-    // The copied span must not run past the requested duration by more than the framing.
     assert!(
         decoded.seconds() <= 1.0 + 2.0 * packet_seconds,
         "the trimmed audio is {:.6}s long, past the one second asked for",
@@ -1144,7 +1125,6 @@ fn a_trim_inside_an_aac_packet_does_not_copy_audio_from_before_the_cut() {
     );
 }
 
-/// The length of each track in an MP4, in seconds, from the durations of its samples.
 fn track_seconds(path: &std::path::Path) -> Vec<(mp4::TrackType, f64)> {
     let file = std::fs::File::open(path).expect("open the trimmed file");
     let size = file.metadata().expect("file metadata").len();
@@ -1187,8 +1167,6 @@ fn a_trim_snapped_back_to_a_keyframe_keeps_audio_running_to_the_requested_end() 
     let source = rendered_source_with_audio(directory.path());
     let destination = directory.path().join("snapped-with-audio.mp4");
 
-    // 0.5 s is between keyframes, so the copy starts earlier than asked. Both tracks must
-    // still end at 1.5 s of the source; audio used to stop at origin + 1 s instead.
     cutix_export::remux::trim(&source, seconds(0.5), seconds(1.0), true, &destination)
         .expect("the trim ran");
     let lengths = track_seconds(&destination);
@@ -1208,7 +1186,6 @@ fn a_trim_snapped_back_to_a_keyframe_keeps_audio_running_to_the_requested_end() 
     );
 }
 
-/// The start of every keyframe on the video track, in seconds, and the frame length.
 fn keyframe_times(path: &std::path::Path) -> (Vec<f64>, f64) {
     let file = std::fs::File::open(path).expect("open the source");
     let size = file.metadata().expect("file metadata").len();
@@ -1242,8 +1219,6 @@ fn keyframe_times(path: &std::path::Path) -> (Vec<f64>, f64) {
     (keyframes, frame)
 }
 
-/// Stream-copies one second of `source` from `start` without snapping to a keyframe,
-/// returning how many frames were copied.
 fn copy_one_second_unsnapped(source: &std::path::Path, start: f64, name: &str) -> u64 {
     let destination = source.with_file_name(name);
     let plan = cutix_export::remux::TrimPlan {
@@ -1269,8 +1244,6 @@ fn a_cut_within_half_a_frame_of_a_keyframe_stream_copies_exactly_one_second() {
 
     let (keyframes, frame) = keyframe_times(&source);
     assert!(frame > 0.0, "the source frames carry a duration");
-    // A keyframe with a second and a couple of frames of material after it, so both the
-    // start and the end of the cut fall inside the 3 s source and the end rule applies.
     let keyframe = keyframes
         .iter()
         .copied()
@@ -1278,16 +1251,10 @@ fn a_cut_within_half_a_frame_of_a_keyframe_stream_copies_exactly_one_second() {
         .expect("a keyframe with a second after it");
     let one_second = (1.0 / frame).round() as u64;
 
-    // 0.4 frames after the keyframe: the keyframe is the nearest frame, and the cut ends
-    // 0.4 frames into a frame, which is dropped. Taking the last frame before the end
-    // instead would copy one frame more.
     assert_eq!(
         copy_one_second_unsnapped(&source, keyframe + 0.4 * frame, "after-keyframe.mp4"),
         one_second
     );
-    // 0.4 frames before the keyframe: the floor is not a keyframe, so a floor start could
-    // not be stream-copied without snapping; the nearest frame is the keyframe. The cut
-    // ends 0.6 frames into a frame, which is kept.
     assert_eq!(
         copy_one_second_unsnapped(&source, keyframe - 0.4 * frame, "before-keyframe.mp4"),
         one_second

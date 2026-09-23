@@ -150,7 +150,6 @@ impl Transitions {
             .any(|track| track.started.elapsed() < TRANSITION && track.from != track.target)
     }
 
-    /// Drops every track `keep` turns down, putting it straight back at rest.
     pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
         self.tracks.retain(|key, _| keep(key));
     }
