@@ -37,7 +37,11 @@ FFMPEG="$ROOT/bin/ffmpeg"
 [ -f "$FFMPEG" ] || { echo "no ffmpeg binary under $ROOT/bin" >&2; exit 1; }
 
 CONFIGURATION="$("$FFMPEG" -hide_banner -version 2>/dev/null | grep '^configuration:' || true)"
-[ -n "$CONFIGURATION" ] || { echo "ffmpeg -version printed no configuration line" >&2; exit 1; }
+if [ -z "$CONFIGURATION" ]; then
+  AVUTIL="$(find "$ROOT" \( -name 'avutil-*.dll' -o -name 'libavutil.so.*' \) -type f | head -n 1 || true)"
+  [ -n "$AVUTIL" ] && CONFIGURATION="configuration: $(grep -a -o -- '--prefix=[^[:cntrl:]]*' "$AVUTIL" | head -n 1 || true)"
+fi
+[ "$CONFIGURATION" != "configuration: " ] && [ -n "$CONFIGURATION" ] || { echo "no configuration line from ffmpeg or libavutil" >&2; exit 1; }
 
 FLAGS="$(printf '%s\n' "${CONFIGURATION#configuration:}" | tr ' ' '\n' | sed '/^$/d')"
 
@@ -84,7 +88,8 @@ for LICENCE in "$ROOT/LICENSE.txt" "$ROOT/LICENSE" "$ROOT/COPYING.LGPLv3"; do
 done
 [ -f "$DESTINATION/FFMPEG-LICENSE.txt" ] || { echo "the build shipped no licence text" >&2; exit 1; }
 
-VERSION_LINE="$("$FFMPEG" -hide_banner -version 2>/dev/null | head -n 1)"
+VERSION_LINE="$("$FFMPEG" -hide_banner -version 2>/dev/null | head -n 1 || true)"
+[ -n "$VERSION_LINE" ] || VERSION_LINE="$ARCHIVE"
 
 cat > "$DESTINATION/PROVENANCE.txt" <<PROVENANCE
 FFmpeg shared libraries bundled with Cutix
