@@ -1,5 +1,3 @@
-//! The editor's own tests.
-
 use super::*;
 
 #[cfg(test)]
@@ -568,6 +566,51 @@ mod editor {
         assert_eq!(right.base().start_time, seconds(1.0));
         assert_eq!(right.base().trim_start, seconds(1.0));
         assert_eq!(selection, vec![right.base().id.clone()]);
+    }
+
+    #[test]
+    fn keeping_only_the_left_part_trims_the_clip_and_keeps_it_selected() {
+        let mut project = project();
+        let mut history = History::default();
+        let mut selection = Vec::new();
+        let mut editor = mk(&mut project, &mut history, &mut selection);
+        editor.insert_media(&asset("clip", 4.0), MediaTime::ZERO, None);
+        let original = selection[0].clone();
+        let mut editor = mk(&mut project, &mut history, &mut selection);
+        assert!(editor.split_retaining(seconds(1.0), Retain::Left));
+
+        let elements: Vec<_> = project.scenes[0]
+            .tracks
+            .all()
+            .flat_map(Track::elements)
+            .cloned()
+            .collect();
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].base().id, original);
+        assert_eq!(elements[0].base().duration, seconds(1.0));
+        assert_eq!(selection, vec![original]);
+    }
+
+    #[test]
+    fn keeping_only_the_right_part_drops_the_left() {
+        let mut project = project();
+        let mut history = History::default();
+        let mut selection = Vec::new();
+        let mut editor = mk(&mut project, &mut history, &mut selection);
+        editor.insert_media(&asset("clip", 4.0), MediaTime::ZERO, None);
+        let original = selection[0].clone();
+        let mut editor = mk(&mut project, &mut history, &mut selection);
+        assert!(editor.split_retaining(seconds(1.0), Retain::Right));
+
+        let elements: Vec<_> = project.scenes[0]
+            .tracks
+            .all()
+            .flat_map(Track::elements)
+            .cloned()
+            .collect();
+        assert_eq!(elements.len(), 1);
+        assert_ne!(elements[0].base().id, original);
+        assert_eq!(elements[0].base().start_time, seconds(1.0));
     }
 
     #[test]

@@ -16,9 +16,6 @@ pub struct PiperConfig {
     pub noise_scale: f32,
     pub length_scale: f32,
     pub noise_w: f32,
-    // Read from the voice config and asserted by the parse test, but nothing consumes
-    // them yet: a Piper voice is loaded, asked to synthesise, and dropped. Kept because a
-    // parser that quietly skips fields is worse than one with fields nobody reads.
     #[allow(dead_code)]
     pub num_speakers: usize,
     #[allow(dead_code)]
@@ -99,18 +96,11 @@ impl PiperConfig {
         Self::parse(&json)
     }
 
-    /// Whether the voice's vocabulary carries this phoneme.
-    ///
-    /// Only the tests ask this, through `unsupported_symbols`; both are compiled for them
-    /// alone so the shipping binary does not carry a check nothing runs.
     #[cfg(test)]
     pub fn knows(&self, phoneme: &str) -> bool {
         self.phoneme_ids.contains_key(phoneme)
     }
 
-    /// The phonemes in `ipa` this voice has no id for.
-    ///
-    /// Only the tests ask this; see `knows`.
     #[cfg(test)]
     pub fn unsupported_symbols(&self, ipa: &str) -> Vec<String> {
         let mut missing: Vec<String> = Vec::new();

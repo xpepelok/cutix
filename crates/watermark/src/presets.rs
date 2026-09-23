@@ -36,7 +36,6 @@ pub fn save_watermark_preset(
 
 pub fn list_watermark_presets(presets: &[StoredWatermarkPreset]) -> Vec<StoredWatermarkPreset> {
     let mut sorted = presets.to_vec();
-    // Newest first: the preset someone just saved is the one they are looking for.
     sorted.sort_by_key(|preset| std::cmp::Reverse(preset.saved_at));
     sorted
 }

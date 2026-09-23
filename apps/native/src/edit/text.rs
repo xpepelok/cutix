@@ -1,6 +1,3 @@
-//! Text elements: their content, their styling, and the animation settings that
-//! drive a reveal.
-
 use super::*;
 
 pub fn text_of(element: &TimelineElement) -> Option<&TextElement> {
@@ -60,6 +57,9 @@ pub(crate) fn clamp_field(field: Field, value: f64) -> f64 {
 }
 
 pub(crate) fn set_field(element: &mut TimelineElement, field: Field, value: f64) {
+    if !value.is_finite() {
+        return;
+    }
     let value = clamp_field(field, value);
     match field {
         Field::GraphicParam(param) => {

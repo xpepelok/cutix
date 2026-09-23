@@ -39,7 +39,7 @@ impl std::error::Error for CapCutError {}
 pub struct Draft {
     pub name: String,
     pub canvas: (u32, u32),
-    pub fps: u32,
+    pub fps: FpsSpec,
     pub duration_seconds: f32,
     pub media: HashMap<String, Media>,
     pub texts: HashMap<String, TextMaterial>,
@@ -106,11 +106,7 @@ pub fn read_draft(raw: &str, name: &str) -> Result<Draft, CapCutError> {
                 parsed.canvas_config.height
             },
         ),
-        fps: if parsed.fps <= 0.0 {
-            30
-        } else {
-            parsed.fps.round() as u32
-        },
+        fps: fps_rational(parsed.fps),
         duration_seconds: ((parsed.duration / 1_000_000.0) as f32).max(longest),
         media: collect_media(&parsed.materials),
         texts: collect_texts(&parsed.materials),
@@ -119,6 +115,46 @@ pub fn read_draft(raw: &str, name: &str) -> Result<Draft, CapCutError> {
         transitions: parsed.materials.transitions.len(),
         video_effects: parsed.materials.video_effects.len(),
     })
+}
+
+fn fps_rational(fps: f64) -> FpsSpec {
+    const TOLERANCE: f64 = 0.005;
+    if !fps.is_finite() || fps <= 0.0 {
+        return FpsSpec {
+            numerator: 30,
+            denominator: 1,
+        };
+    }
+
+    let whole = fps.round();
+    if (fps - whole).abs() < TOLERANCE {
+        return FpsSpec {
+            numerator: whole as u32,
+            denominator: 1,
+        };
+    }
+
+    let ntsc_base = (fps * 1001.0 / 1000.0).round();
+    if ntsc_base > 0.0 && (fps - ntsc_base * 1000.0 / 1001.0).abs() < TOLERANCE {
+        return FpsSpec {
+            numerator: ntsc_base as u32 * 1000,
+            denominator: 1001,
+        };
+    }
+
+    let numerator = (fps * 1000.0).round() as u32;
+    let divisor = gcd(numerator, 1000);
+    FpsSpec {
+        numerator: numerator / divisor,
+        denominator: 1000 / divisor,
+    }
+}
+
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.max(1)
 }
 
 pub fn load_draft(path: impl AsRef<Path>) -> Result<Draft, CapCutError> {
@@ -243,10 +279,7 @@ pub fn draft_to_template(draft: &Draft) -> Result<TemplateManifest, CapCutError>
             width: draft.canvas.0,
             height: draft.canvas.1,
         },
-        fps: FpsSpec {
-            numerator: draft.fps,
-            denominator: 1,
-        },
+        fps: draft.fps,
         duration_seconds: draft.duration_seconds,
         slots,
         scenes: serde_json::Value::Null,
@@ -422,6 +455,37 @@ mod tests {
             parse_draft("{ nope", "d"),
             Err(CapCutError::NotJson(_))
         ));
+    }
+
+    fn fps(numerator: u32, denominator: u32) -> FpsSpec {
+        FpsSpec {
+            numerator,
+            denominator,
+        }
+    }
+
+    #[test]
+    fn ntsc_frame_rates_keep_their_exact_rational() {
+        assert_eq!(fps_rational(29.97), fps(30000, 1001));
+        assert_eq!(fps_rational(29.970_029_97), fps(30000, 1001));
+        assert_eq!(fps_rational(23.976), fps(24000, 1001));
+        assert_eq!(fps_rational(59.94), fps(60000, 1001));
+    }
+
+    #[test]
+    fn whole_and_other_frame_rates_are_not_mistaken_for_ntsc() {
+        assert_eq!(fps_rational(30.0), fps(30, 1));
+        assert_eq!(fps_rational(25.0), fps(25, 1));
+        assert_eq!(fps_rational(12.5), fps(25, 2));
+        assert_eq!(fps_rational(0.0), fps(30, 1));
+        assert_eq!(fps_rational(f64::NAN), fps(30, 1));
+    }
+
+    #[test]
+    fn an_ntsc_draft_produces_an_ntsc_template() {
+        let raw = draft_json().replacen(r#""fps": 30"#, r#""fps": 29.97"#, 1);
+        let manifest = parse_draft(&raw, "ntsc").unwrap();
+        assert_eq!(manifest.fps, fps(30000, 1001));
     }
 
     #[test]

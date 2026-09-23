@@ -73,16 +73,6 @@ static CH_LAYOUT_OFFSET: OnceLock<Option<usize>> = OnceLock::new();
 
 static AAC_ENCODER_PRESENT: OnceLock<bool> = OnceLock::new();
 
-/// Whether this FFmpeg build actually carries an AAC encoder.
-///
-/// Having the encoder entry points is not the same as having the codec: a build compiled
-/// without `aac` exposes `avcodec_find_encoder_by_name` and answers `null` for it. Asking
-/// the general encoder question and assuming AAC follows is what let export commit to a
-/// muxed MP4 and then fail at the point of opening the audio encoder, with the destination
-/// file already created.
-///
-/// Also checks that `AVFrame::ch_layout` can be located, because feeding the encoder is
-/// impossible without it. The probe runs once and is cached.
 pub fn can_encode_aac() -> bool {
     *AAC_ENCODER_PRESENT.get_or_init(|| {
         let Ok(ffmpeg) = super::instance() else {

@@ -103,6 +103,39 @@ fn main() {
          n.tagName.toLowerCase() + ' checked=' + n.getAttribute('aria-checked') : 'absent'; })()",
     );
 
+    let _ = page.click(&mut connection, css::SCHEDULE_TOGGLE);
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    let field = |selector: &str| {
+        format!(
+            "(() => {{ const node = {}; if (!node) return 'absent'; \
+             const input = node.matches('input') ? node : node.querySelector('input'); \
+             return 'text=' + JSON.stringify((node.innerText || '').trim()) + \
+             ' value=' + JSON.stringify(input ? input.value : null); }})()",
+            query(selector)
+        )
+    };
+    dump(
+        &page,
+        &mut connection,
+        "the schedule's date, before the picker opens",
+        &field(css::SCHEDULE_DATE_TRIGGER),
+    );
+    dump(
+        &page,
+        &mut connection,
+        "the schedule's time",
+        &field(css::SCHEDULE_TIME),
+    );
+    let _ = page.click(&mut connection, css::SCHEDULE_DATE_TRIGGER);
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    dump(
+        &page,
+        &mut connection,
+        "the date picker's own text field",
+        &field(css::SCHEDULE_DATE_INPUT),
+    );
+    let _ = page.press(&mut connection, youtube::cdp::Key::Escape);
+
     connection.close_browser();
     browser.wait_for_exit(std::time::Duration::from_secs(10));
     println!("\nbrowser closed; a draft was left behind and nothing was published");

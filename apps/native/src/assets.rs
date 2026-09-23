@@ -44,6 +44,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "snow",
     "sorting-one-nine",
     "upload04",
+    "download04",
     "video01",
     "volume-high",
     "volume-mute",
@@ -62,6 +63,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "sun03",
     "tick02",
     "win-close",
+    "cancel01",
     "win-maximize",
     "win-minimize",
     "win-restore",
@@ -123,8 +125,6 @@ impl AssetSource for Icons {
     }
 }
 
-/// Only the tests in this file ask this; compiled for them alone so the shipping
-/// binary does not carry a function nothing calls.
 #[cfg(test)]
 pub fn icon_exists(name: &str) -> bool {
     ICONS.iter().any(|(known, _)| *known == name)

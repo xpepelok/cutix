@@ -255,15 +255,10 @@ pub struct PropertiesPanel {
     rail_scroll: ScrollHandle,
 }
 
-/// One colour setting shown as a labelled swatch with an editable hex field.
 struct ColorRow {
     label: String,
-    /// Which colour of the element this row edits.
     setting: TextSetting,
-    /// The colour the element holds right now, as a hex string.
     current: String,
-    /// Where the colour lives inside the element, for settings stored under a nested
-    /// object rather than at the top level. `None` when the setting names it directly.
     path: Option<&'static str>,
 }
 
@@ -1501,13 +1496,11 @@ impl PropertiesPanel {
         let text = editing.field.text().trim().to_string();
         match editing.target {
             Target::Number { field, scale } => {
-                if let Ok(parsed) = text.parse::<f64>() {
+                if let Some(parsed) = parse_typed_number(&text) {
                     self.commit_number(&editing.element, field, parsed / scale, cx);
                 }
             }
             Target::Text(setting) => {
-                // Colour settings are stored with a leading hash; content is stored
-                // verbatim. Both keep the typed text as-is, so they share a branch.
                 let value = if matches!(setting, TextSetting::Content) || text.starts_with('#') {
                     text
                 } else {
@@ -1598,13 +1591,19 @@ fn inline_editor(
         window,
     )
     .on_key_down(cx.listener(
-        |this: &mut PropertiesPanel, event: &gpui::KeyDownEvent, _, cx| {
+        |this: &mut PropertiesPanel, event: &gpui::KeyDownEvent, window: &mut Window, cx| {
             let Some(editing) = this.editing.as_mut() else {
                 return;
             };
             match editing.field.buffer.key_down(event) {
-                TextEvent::Submit => this.commit_editing(cx),
-                TextEvent::Cancel => this.editing = None,
+                TextEvent::Submit => {
+                    this.commit_editing(cx);
+                    window.blur();
+                }
+                TextEvent::Cancel => {
+                    this.editing = None;
+                    window.blur();
+                }
                 _ => {}
             }
             cx.notify();
@@ -5877,5 +5876,29 @@ mod tests {
             String::from("Sample"),
             crate::text::patch_for(&crate::text::presets()[0]),
         )
+    }
+}
+
+pub(crate) fn parse_typed_number(text: &str) -> Option<f64> {
+    let text = text.trim().replace(',', ".");
+    let value = text.parse::<f64>().ok()?;
+    value.is_finite().then_some(value)
+}
+
+#[cfg(test)]
+mod typed_number_tests {
+    use super::parse_typed_number;
+
+    #[test]
+    fn a_decimal_comma_reads_like_a_point() {
+        assert_eq!(parse_typed_number("1,5"), Some(1.5));
+        assert_eq!(parse_typed_number(" -2.25 "), Some(-2.25));
+    }
+
+    #[test]
+    fn values_that_cannot_be_saved_are_refused() {
+        for text in ["nan", "NaN", "inf", "-inf", "infinity", "1e999", "", "abc"] {
+            assert_eq!(parse_typed_number(text), None, "{text}");
+        }
     }
 }

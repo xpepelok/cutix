@@ -226,13 +226,16 @@ pub struct AppModel {
     pub store: ProjectStore,
     pub projects: Vec<ProjectSummary>,
     pub projects_loaded: bool,
+    projects_generation: u64,
+    save_sequence: u64,
+    save_gate: std::sync::Arc<std::sync::Mutex<u64>>,
+    open_generation: u64,
     pub route: Route,
     pub project: Option<Project>,
     pub media: Vec<MediaAssetData>,
     pub media_root: Option<PathBuf>,
     pub importing: usize,
-    pub pending_import: Vec<PathBuf>,
-    pub pending_on_timeline: bool,
+    pub pending_import: Option<PendingImport>,
     pub editor_origin: Route,
     pub notice: Option<String>,
     pub selection: Vec<String>,
@@ -273,6 +276,13 @@ pub struct AppModel {
     debounce_token: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingImport {
+    pub project_id: String,
+    pub paths: Vec<PathBuf>,
+    pub onto_timeline: bool,
+}
+
 pub const AUTOSAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
 
 pub const AUTOSAVE_MAX_DEFER: std::time::Duration = std::time::Duration::from_millis(2_000);
@@ -285,8 +295,6 @@ pub enum WaveformState {
 }
 
 impl AppModel {
-    /// Only the tests in this file ask this; compiled for them alone so the shipping
-    /// binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn is_dirty(&self) -> bool {
         self.dirty
@@ -299,13 +307,16 @@ impl AppModel {
             store,
             projects: Vec::new(),
             projects_loaded: false,
+            projects_generation: 0,
+            save_sequence: 0,
+            save_gate: std::sync::Arc::new(std::sync::Mutex::new(0)),
+            open_generation: 0,
             route: Route::Home,
             project: None,
             media: Vec::new(),
             media_root: None,
             importing: 0,
-            pending_import: Vec::new(),
-            pending_on_timeline: false,
+            pending_import: None,
             editor_origin: Route::Projects,
             notice: None,
             selection: Vec::new(),
@@ -449,11 +460,16 @@ impl AppModel {
 
     pub fn refresh_projects(&mut self, cx: &mut Context<Self>) {
         let store = self.store.clone();
+        self.projects_generation += 1;
+        let generation = self.projects_generation;
         cx.spawn(async move |this, cx| {
             let (listed, unreadable) = cx
                 .background_spawn(async move { list_readable_projects(&store) })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.projects_generation != generation {
+                    return;
+                }
                 this.projects = listed;
                 this.projects_loaded = true;
                 if unreadable > 0 {
@@ -507,8 +523,11 @@ impl AppModel {
                 Ok(project) => {
                     let id = project.metadata.id.clone();
                     this.refresh_projects(cx);
-                    this.pending_import = vec![path];
-                    this.pending_on_timeline = true;
+                    this.pending_import = Some(PendingImport {
+                        project_id: id.clone(),
+                        paths: vec![path],
+                        onto_timeline: true,
+                    });
                     this.open_project(&id, cx);
                 }
                 Err(error) => {
@@ -553,10 +572,13 @@ impl AppModel {
         };
         let store = self.store.clone();
         let id = id.to_string();
+        self.open_generation += 1;
+        let generation = self.open_generation;
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_spawn(async move {
                     let project = store.load(&id)?.project;
+                    let _ = store.sweep_mattes(&project);
                     let media = MediaStore::for_project(&store, &id);
                     let assets = media.list().unwrap_or_default();
                     Ok::<_, cutix_project::ProjectError>((
@@ -568,8 +590,16 @@ impl AppModel {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
+                if this.open_generation != generation {
+                    return;
+                }
                 match loaded {
                     Ok((project, media, root)) => {
+                        if this.project.is_some() {
+                            this.stop_preview(cx);
+                        }
+                        this.export.forget_project();
+                        let opened_id = project.metadata.id.clone();
                         this.project = Some(project);
                         this.media = media;
                         this.media_root = Some(root);
@@ -580,19 +610,20 @@ impl AppModel {
                         this.playhead = time::MediaTime::ZERO;
                         this.route = Route::Editor;
                         this.start_preview(cx);
-                        let waiting = std::mem::take(&mut this.pending_import);
-                        let onto_timeline = std::mem::take(&mut this.pending_on_timeline);
-                        if !waiting.is_empty() {
-                            if onto_timeline && waiting.len() == 1 {
-                                this.import_media_at_playhead(waiting[0].clone(), cx);
+                        if let Some(waiting) = this
+                            .pending_import
+                            .take()
+                            .filter(|waiting| waiting.project_id == opened_id)
+                        {
+                            if waiting.onto_timeline && waiting.paths.len() == 1 {
+                                this.import_media_at_playhead(waiting.paths[0].clone(), cx);
                             } else {
-                                this.import_media(waiting, cx);
+                                this.import_media(waiting.paths, cx);
                             }
                         }
                     }
                     Err(error) => {
-                        this.pending_import.clear();
-                        this.pending_on_timeline = false;
+                        this.pending_import = None;
                         this.notice = Some(failure("toast.project.notFound", &error));
                     }
                 }
@@ -604,6 +635,11 @@ impl AppModel {
 
     pub fn close_project(&mut self, cx: &mut Context<Self>) {
         self.save_now();
+        if let Some(project) = self.project.as_ref() {
+            let _ = self.store.sweep_mattes(project);
+        }
+        self.open_generation += 1;
+        self.export.forget_project();
         self.route = self.editor_origin;
         self.project = None;
         self.media.clear();
@@ -619,25 +655,34 @@ impl AppModel {
     }
 
     pub fn rename_project(&mut self, id: &str, name: String, cx: &mut Context<Self>) {
+        if self.is_open(id) {
+            if let Some(project) = self.project.as_mut() {
+                project.metadata.name = name;
+                project.metadata.updated_at = cutix_project::now_iso();
+            }
+            self.dirty = true;
+            self.save_now();
+            self.refresh_projects(cx);
+            cx.notify();
+            return;
+        }
         let store = self.store.clone();
         let id = id.to_string();
-        let open = self
-            .project
-            .as_ref()
-            .is_some_and(|project| project.metadata.id == id);
-
-        if open {
-            self.save_now();
-        }
         cx.spawn(async move |this, cx| {
             let renamed = cx
                 .background_spawn(async move { store.rename(&id, name) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 match renamed {
-                    Ok(project) => {
-                        if open {
-                            this.project = Some(project);
+                    Ok(renamed) => {
+                        if let Some(current) = this
+                            .project
+                            .as_mut()
+                            .filter(|project| project.metadata.id == renamed.metadata.id)
+                        {
+                            current.metadata.name = renamed.metadata.name;
+                            current.metadata.updated_at = renamed.metadata.updated_at;
+                            this.save_project(cx);
                         }
                         this.refresh_projects(cx);
                     }
@@ -709,6 +754,7 @@ impl AppModel {
 
         let store = self.store.clone();
         let start = self.playhead;
+        let owner = project_id.clone();
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_spawn(async move {
@@ -721,11 +767,15 @@ impl AppModel {
             let _ = this.update(cx, |this, cx| {
                 let (imported, label, root) = outcome;
                 this.importing = this.importing.saturating_sub(1);
+                if !this.is_open(&owner) {
+                    cx.notify();
+                    return;
+                }
                 this.media_root = Some(root);
                 match imported {
                     Ok(asset) => {
                         let bare = this.timeline_is_empty();
-                        this.media.push(asset.clone());
+                        merge_imported(&mut this.media, [asset.clone()]);
                         this.refresh_missing_media();
                         this.edit(cx, |editor| editor.insert_media(&asset, start, None));
                         if bare {
@@ -765,6 +815,7 @@ impl AppModel {
         cx.notify();
 
         let store = self.store.clone();
+        let owner = project_id.clone();
         cx.spawn(async move |this, cx| {
             let count = paths.len();
             let outcome = cx
@@ -785,8 +836,12 @@ impl AppModel {
             let _ = this.update(cx, |this, cx| {
                 let (imported, failures, root) = outcome;
                 this.importing = this.importing.saturating_sub(count);
+                if !this.is_open(&owner) {
+                    cx.notify();
+                    return;
+                }
                 this.media_root = Some(root);
-                this.media.extend(imported);
+                merge_imported(&mut this.media, imported);
                 this.refresh_missing_media();
                 if let Some((name, why)) = failures.first() {
                     this.notice = Some(cutix_i18n::t_args(
@@ -1000,9 +1055,6 @@ impl AppModel {
         let Some(project) = self.project.as_mut() else {
             return;
         };
-        // Compared in reduced form: a project saved before frame rates were reduced holds
-        // the same rate written as a different fraction, and adopting it again would mark
-        // the project dirty for no change the user made.
         if project.settings.fps.reduced() == rate.reduced() {
             return;
         }
@@ -1080,8 +1132,10 @@ impl AppModel {
             return;
         };
         let store = self.store.clone();
+        let gate = self.save_gate.clone();
+        let sequence = self.save_sequence;
         cx.background_spawn(async move {
-            write_project(&store, &project, thumbnail);
+            write_in_order(&gate, sequence, &store, &project, thumbnail);
         })
         .detach();
     }
@@ -1090,7 +1144,13 @@ impl AppModel {
         let Some((project, thumbnail)) = self.take_pending_save() else {
             return;
         };
-        write_project(&self.store, &project, thumbnail);
+        write_in_order(
+            &self.save_gate,
+            self.save_sequence,
+            &self.store,
+            &project,
+            thumbnail,
+        );
     }
 
     fn take_pending_save(&mut self) -> Option<(Project, Option<crate::playback::Thumbnail>)> {
@@ -1099,6 +1159,7 @@ impl AppModel {
             return None;
         }
         self.pending_epoch = self.pending_epoch.wrapping_add(1);
+        self.save_sequence += 1;
         self.dirty = false;
 
         if let Some(project) = self.project.as_mut() {
@@ -1328,6 +1389,23 @@ fn list_readable_projects(store: &ProjectStore) -> (Vec<ProjectSummary>, usize) 
     (summaries, unreadable)
 }
 
+fn write_in_order(
+    gate: &std::sync::Mutex<u64>,
+    sequence: u64,
+    store: &ProjectStore,
+    project: &Project,
+    thumbnail: Option<crate::playback::Thumbnail>,
+) {
+    let mut written = gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if sequence <= *written {
+        return;
+    }
+    write_project(store, project, thumbnail);
+    *written = sequence;
+}
+
 fn write_project(
     store: &ProjectStore,
     project: &Project,
@@ -1344,11 +1422,21 @@ fn write_project(
     let _ = store.save(project);
 }
 
+fn merge_imported(
+    media: &mut Vec<MediaAssetData>,
+    imported: impl IntoIterator<Item = MediaAssetData>,
+) {
+    for asset in imported {
+        if !media.iter().any(|known| known.id == asset.id) {
+            media.push(asset);
+        }
+    }
+}
+
 fn file_label(path: &Path) -> String {
     path.file_name()
-        .and_then(|name| name.to_str())
+        .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
-        .to_string()
 }
 
 fn failure(key: &str, error: &cutix_project::ProjectError) -> String {
@@ -1424,7 +1512,7 @@ mod autosave_tests {
         model.read_with(cx, |this, _| {
             assert!(this.project.is_some(), "the project has to be open");
             assert!(
-                this.pending_import.is_empty(),
+                this.pending_import.is_none(),
                 "the waiting import has to be handed over, not left behind"
             );
             assert_ne!(
@@ -1433,6 +1521,72 @@ mod autosave_tests {
                 "importing must not run before the project is open"
             );
         });
+    }
+
+    #[gpui::test]
+    async fn an_import_queued_for_a_superseded_open_does_not_land_on_the_next_project(
+        cx: &mut TestAppContext,
+    ) {
+        let (directory, store) = scratch();
+        let model = model(&store, cx);
+
+        let clip = directory.path().join("clip.mp4");
+        std::fs::write(&clip, b"not really a video").expect("write");
+        let fresh = store.create("Fresh").expect("create");
+        let other = store.create("Other").expect("create other");
+
+        model.update(cx, |this, cx| {
+            this.pending_import = Some(PendingImport {
+                project_id: fresh.metadata.id.clone(),
+                paths: vec![clip],
+                onto_timeline: true,
+            });
+            this.open_project(&fresh.metadata.id, cx);
+            this.open_project(&other.metadata.id, cx);
+        });
+        cx.run_until_parked();
+
+        model.read_with(cx, |this, _| {
+            assert!(this.is_open(&other.metadata.id), "the later open wins");
+            assert!(this.pending_import.is_none(), "the stale import is dropped");
+            assert!(
+                this.timeline_is_empty() && this.notice.is_none(),
+                "the clip meant for the superseded project was imported into the other one"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn renaming_the_open_project_is_written_through_the_save_gate_at_once(
+        cx: &mut TestAppContext,
+    ) {
+        let (_guard, store) = scratch();
+        let model = model(&store, cx);
+        let id = with_project(&model, &store, cx);
+
+        model.update(cx, |this, cx| {
+            this.rename_project(&id, "Renamed".to_string(), cx)
+        });
+
+        assert_eq!(rename_on_disk(&store, &id), "Renamed");
+        assert_eq!(
+            model.read_with(cx, |this, _| this.project_name()),
+            "Renamed",
+            "the open document has to carry the name, it is what later saves write"
+        );
+
+        model.update(cx, |this, cx| {
+            if let Some(project) = this.project.as_mut() {
+                project.metadata.duration = time::MediaTime::from_ticks(3 * 120_000);
+            }
+            this.save_project(cx);
+        });
+        cx.executor().advance_clock(AUTOSAVE_DEBOUNCE * 2);
+        cx.run_until_parked();
+
+        let on_disk = store.load(&id).expect("load").project;
+        assert_eq!(on_disk.metadata.name, "Renamed");
+        assert_eq!(on_disk.metadata.duration.as_ticks(), 3 * 120_000);
     }
 
     #[gpui::test]
@@ -1551,6 +1705,25 @@ mod autosave_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn asset(id: &str) -> MediaAssetData {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": id,
+            "type": "video",
+            "size": 1,
+            "lastModified": 0,
+        }))
+        .expect("asset")
+    }
+
+    #[test]
+    fn a_batch_that_finishes_after_a_reopen_does_not_list_its_files_twice() {
+        let mut media = vec![asset("a")];
+        merge_imported(&mut media, [asset("a"), asset("b")]);
+        let ids: Vec<&str> = media.iter().map(|asset| asset.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
 
     #[test]
     fn iso_dates_render_day_first() {

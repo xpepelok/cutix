@@ -1,21 +1,13 @@
 pub mod accounts;
-/// The Chrome DevTools client the browser automation runs on.
-///
-/// Public because driving a page directly is how the probe examples and any
-/// future diagnostic tooling work; the selectors and login flows built on top of
-/// it stay internal.
 pub mod cdp;
 pub mod chrome;
+pub mod clock;
 mod devtools;
 pub mod failure;
 pub mod history;
 mod login;
 pub mod publish;
 pub mod queue;
-/// The page selectors and probes the studio automation matches against.
-///
-/// Public because the probe examples exist to check these against the live site when
-/// YouTube changes its markup, which is the only warning we get before uploads break.
 pub mod selectors;
 pub mod session;
 pub mod studio;
@@ -76,6 +68,44 @@ pub fn iso_timestamp(seconds: i64) -> String {
     )
 }
 
+pub fn unix_from_civil(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
+    let year = year as i64;
+    let month = month as i64;
+    let day = day as i64;
+    let (year, month) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    days * 86_400 + hour.min(23) as i64 * 3_600 + minute.min(59) as i64 * 60
+}
+
+pub fn unix_from_iso(stamp: &str) -> Option<i64> {
+    if !publish::is_rfc3339_utc(stamp) {
+        return None;
+    }
+    let number = |start: usize, end: usize| stamp[start..end].parse::<u32>().ok();
+    let year = stamp[0..4].parse::<i32>().ok()?;
+    let seconds = unix_from_civil(
+        year,
+        number(5, 7)?,
+        number(8, 10)?,
+        number(11, 13)?,
+        number(14, 16)?,
+    ) + i64::from(number(17, 19)?);
+    (iso_timestamp(seconds) == stamp).then_some(seconds)
+}
+
+pub fn utc_stamp_of_local_digits(stamp: &str, zone: clock::Zone) -> Option<String> {
+    let wall = unix_from_iso(stamp.trim())?;
+    Some(iso_timestamp(zone.instant(wall)))
+}
+
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -102,6 +132,47 @@ mod tests {
         assert_eq!(iso_date(-1), "1969-12-31");
         assert_eq!(iso_timestamp(1_700_000_000), "2023-11-14T22:13:20Z");
         assert_eq!(iso_timestamp(0), "1970-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn a_stamp_reads_back_as_the_second_it_was_written_from() {
+        for seconds in [0, 951_782_400, 1_700_000_000, 1_790_000_123] {
+            assert_eq!(unix_from_iso(&iso_timestamp(seconds)), Some(seconds));
+        }
+        assert_eq!(unix_from_civil(2023, 11, 14, 22, 13) + 20, 1_700_000_000);
+        assert_eq!(
+            unix_from_iso("2026-09-23T15:00:00"),
+            None,
+            "no zone, no instant"
+        );
+        assert_eq!(unix_from_iso("tomorrow"), None);
+        assert_eq!(
+            unix_from_iso("2023-02-29T00:00:00Z"),
+            None,
+            "not a leap year"
+        );
+    }
+
+    #[test]
+    fn digits_picked_on_a_local_clock_move_onto_the_instant_they_named() {
+        let moscow = clock::Zone::Fixed(3 * 3_600);
+        assert_eq!(
+            utc_stamp_of_local_digits("2026-09-23T15:00:00Z", moscow).as_deref(),
+            Some("2026-09-23T12:00:00Z"),
+            "15:00 picked in Moscow is 12:00 UTC"
+        );
+        let new_york = clock::Zone::Fixed(-5 * 3_600);
+        assert_eq!(
+            utc_stamp_of_local_digits("2026-09-23T22:00:00Z", new_york).as_deref(),
+            Some("2026-09-24T03:00:00Z"),
+            "the date rolls forward west of Greenwich"
+        );
+        assert_eq!(utc_stamp_of_local_digits("tomorrow", moscow), None);
+        assert_eq!(
+            utc_stamp_of_local_digits("2026-09-23T15:00:00Z", clock::Zone::Fixed(0)).as_deref(),
+            Some("2026-09-23T15:00:00Z"),
+            "a clock on UTC changes nothing"
+        );
     }
 
     #[test]

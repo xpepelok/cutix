@@ -30,6 +30,7 @@ pub const SWS_CS_ITU601: c_int = 5;
 pub const SWS_CS_BT2020: c_int = 9;
 
 pub const AVSEEK_FLAG_BACKWARD: c_int = 1;
+pub const AV_NOPTS_VALUE: i64 = i64::MIN;
 
 pub const AVCOL_RANGE_MPEG: c_int = 1;
 pub const AVCOL_RANGE_JPEG: c_int = 2;

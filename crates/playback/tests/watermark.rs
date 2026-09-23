@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use cutix_playback::MediaMap;
 use cutix_playback::render::{ComposeRequest, FrameComposer};
@@ -11,16 +12,34 @@ fn seconds(value: f64) -> MediaTime {
     MediaTime::from_seconds_f64(value).unwrap()
 }
 
-fn solid_png(name: &str, size: u32, rgba: [u8; 4]) -> PathBuf {
-    let directory = std::env::temp_dir().join("cutix-playback-tests");
-    std::fs::create_dir_all(&directory).unwrap();
-    let path = directory.join(name);
-    let mut buffer = image::RgbaImage::new(size, size);
-    for pixel in buffer.pixels_mut() {
-        *pixel = image::Rgba(rgba);
-    }
-    buffer.save(&path).unwrap();
-    path
+fn solid_png(slot: &'static OnceLock<PathBuf>, label: &str, rgba: [u8; 4]) -> PathBuf {
+    slot.get_or_init(|| {
+        let directory = std::env::temp_dir().join("cutix-playback-tests");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("wm-{label}-{}.png", std::process::id()));
+        let mut buffer = image::RgbaImage::new(8, 8);
+        for pixel in buffer.pixels_mut() {
+            *pixel = image::Rgba(rgba);
+        }
+        buffer.save(&path).unwrap();
+        path
+    })
+    .clone()
+}
+
+fn green_background() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    solid_png(&PATH, "bg-green", [0, 255, 0, 255])
+}
+
+fn black_background() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    solid_png(&PATH, "bg-black", [0, 0, 0, 255])
+}
+
+fn magenta_mark() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    solid_png(&PATH, "mark-magenta", [255, 0, 255, 255])
 }
 
 fn background_element() -> TimelineElement {
@@ -79,8 +98,8 @@ fn watermark_settings(patch: serde_json::Value) -> serde_json::Value {
 
 fn media() -> MediaMap {
     MediaMap::new()
-        .with("bg", solid_png("wm-bg.png", 8, [0, 255, 0, 255]))
-        .with("wm", solid_png("wm-mark.png", 8, [255, 0, 255, 255]))
+        .with("bg", green_background())
+        .with("wm", magenta_mark())
 }
 
 fn is_magenta(pixel: [u8; 4]) -> bool {
@@ -317,7 +336,7 @@ fn a_text_watermark_burns_visible_ink() {
         eprintln!("no gpu adapter; skipping");
         return;
     };
-    let media = MediaMap::new().with("bg", solid_png("wm-bg.png", 8, [0, 0, 0, 255]));
+    let media = MediaMap::new().with("bg", black_background());
 
     let project = watermark_project(watermark_settings(json!({
         "anchor": "center",

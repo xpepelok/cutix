@@ -106,9 +106,6 @@ pub fn format_timecode(
             "{hours:02}:{minutes:02}:{seconds:02}:{centiseconds:02}"
         )),
         TimeCodeFormat::HhMmSsFf => {
-            // The frame field counts whole frames elapsed inside the current second, so it
-            // is a floor over the exact frame duration rather than a division by a rounded
-            // frame length. Rates whose frame is a fractional number of ticks display too.
             let frame = rate?.frame_duration()?;
             let frames = frame.frame_floor(i64::try_from(second_ticks).ok()?)?;
             Some(format!("{hours:02}:{minutes:02}:{seconds:02}:{frames:02}"))

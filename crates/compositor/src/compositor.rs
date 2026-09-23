@@ -76,10 +76,6 @@ struct MaskUniformBuffer {
     _padding: [f32; 3],
 }
 
-/// The pixel dimensions of a render target.
-///
-/// The compositor's passes all work at the frame size, and every one of them needs both
-/// numbers; carrying them as one value keeps a caller from transposing them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Extent {
     pub width: u32,

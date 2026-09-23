@@ -6,22 +6,12 @@ use time::FrameRate;
 use crate::error::Result;
 use crate::presets::ExportQuality;
 
-/// What the video track of an export should look like.
 #[derive(Clone, Copy, Debug)]
 pub struct VideoSpec {
     pub width: u32,
     pub height: u32,
     pub frame_rate: FrameRate,
-    /// Target bitrate for backends whose rate control uses one.
-    ///
-    /// Not every encoder can honour this. OpenH264 cannot hold a bitrate without being
-    /// allowed to drop frames, so it reads `quality` instead. A backend that ignores this
-    /// field must say so rather than appearing to accept it.
     pub bitrate_bps: u32,
-    /// The quality the user chose, kept in its own terms rather than only as a bitrate.
-    ///
-    /// Backends that control quality directly map this to their own knob, so the setting
-    /// survives to an encoder that cannot express it as a bitrate.
     pub quality: ExportQuality,
 }
 

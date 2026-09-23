@@ -42,8 +42,6 @@ fn resize_rgba(
     output
 }
 
-/// One fixture clip to produce: where it comes from, where it goes, and what it should
-/// look like.
 struct ClipRecipe<'paths> {
     source: &'paths Path,
     destination: &'paths Path,
@@ -51,7 +49,6 @@ struct ClipRecipe<'paths> {
     height: u32,
     frame_rate: FrameRate,
     frames: u32,
-    /// Where in the source the clip starts, in seconds.
     start_seconds: f64,
     bitrate_bps: u32,
 }

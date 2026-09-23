@@ -242,6 +242,15 @@ impl ExportSession {
         }
     }
 
+    pub fn forget_project(&mut self) {
+        self.open = false;
+        self.destination = None;
+        self.youtube_source = None;
+        if !self.is_running() {
+            self.status = ExportStatus::Idle;
+        }
+    }
+
     pub fn resolved_destination(&self, project_name: &str) -> PathBuf {
         self.destination
             .clone()
@@ -412,6 +421,21 @@ impl AppModel {
         let media = MediaStore::for_project(&self.store, &project.metadata.id);
         let matte_root = Some(self.store.project_directory(&project.metadata.id));
         let scene_id = Some(project.current_scene_id.clone());
+
+        let resolver = StoreResolver::new(media);
+        if let Some(id) = cutix_playback::missing_media(&project, scene_id.as_deref(), &resolver)
+            .into_iter()
+            .next()
+        {
+            let assets = MediaStore::for_project(&self.store, &project.metadata.id);
+            let message = match assets.get(&id) {
+                Ok(asset) => t_args("preview.mediaMissing", &[("name", &asset.name)]),
+                Err(_) => t("preview.mediaMissing.unknown"),
+            };
+            self.export.status = ExportStatus::Failed(message);
+            cx.notify();
+            return;
+        }
         let frame_rate = project.settings.fps;
         let quality = self.export.quality;
         let include_audio = self.export.include_audio;
@@ -436,7 +460,6 @@ impl AppModel {
         let spawned = std::thread::Builder::new()
             .name("cutix-export".into())
             .spawn(move || {
-                let resolver = StoreResolver::new(media);
                 let count = destinations.len().max(1) as f32;
                 let mut last: Option<Result<RunOutcome, String>> = None;
                 for (index, ((destination, (width, height)), _)) in destinations
@@ -1421,17 +1444,13 @@ fn notice(colors: Palette, title: String, body: String) -> Div {
         )
 }
 
-/// What the progress readout shows while an export runs.
 #[derive(Clone, Copy)]
 struct RunningProgress {
-    /// How far through, from 0 to 1.
     fraction: f32,
-    /// Frames written so far, and how many there will be.
     frame: u64,
     total: u64,
     frames_per_second: f32,
     stage: Stage,
-    /// Animation phase for the moving highlight, from 0 to 1.
     phase: f32,
 }
 

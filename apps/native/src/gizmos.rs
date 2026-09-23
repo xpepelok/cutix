@@ -682,11 +682,8 @@ pub const GUIDE_REGISTRY: &[GuideEntry] = &[
     },
 ];
 
-/// A rectangle of a preview canvas that a platform's own interface covers, in fractions
-/// of the canvas: `(left, top, width, height)`.
 type SafeAreaBand = (f32, f32, f32, f32);
 
-/// The bands each platform overlays, keyed by platform id.
 const PLATFORM_BANDS: &[(&str, &[SafeAreaBand])] = &[
     (
         "tiktok",

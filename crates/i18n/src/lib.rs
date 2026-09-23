@@ -243,10 +243,27 @@ fn lookup(locale: &str, key: &str) -> String {
 }
 
 fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
-    let mut result = template.to_string();
-    for (name, value) in args {
-        result = result.replace(&format!("{{{name}}}"), value);
+    let mut result = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('}') else {
+            break;
+        };
+        result.push_str(&rest[..open]);
+        let name = &after_open[..close];
+        if name.contains('{') {
+            result.push('{');
+            rest = after_open;
+            continue;
+        }
+        match args.iter().find(|(arg, _)| *arg == name) {
+            Some((_, value)) => result.push_str(value),
+            None => result.push_str(&rest[open..open + close + 2]),
+        }
+        rest = &after_open[close + 1..];
     }
+    result.push_str(rest);
     result
 }
 
@@ -370,5 +387,26 @@ mod tests {
             interpolate("Created {date}", &[("date", "10.08.2026")]),
             "Created 10.08.2026"
         );
+    }
+
+    #[test]
+    fn substituted_values_are_not_expanded_again() {
+        assert_eq!(
+            interpolate(
+                "{name}: {count} clips",
+                &[("name", "clip {count}"), ("count", "3")]
+            ),
+            "clip {count}: 3 clips"
+        );
+    }
+
+    #[test]
+    fn unknown_and_unclosed_placeholders_are_kept_verbatim() {
+        assert_eq!(
+            interpolate("{a} {missing} {b", &[("a", "1")]),
+            "1 {missing} {b"
+        );
+        assert_eq!(interpolate("{{a}}", &[("a", "x")]), "{x}");
+        assert_eq!(interpolate("", &[("a", "x")]), "");
     }
 }

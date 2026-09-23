@@ -33,6 +33,39 @@ pub struct ComposeRequest<'a> {
     pub height: u32,
 }
 
+pub fn missing_media(
+    project: &Project,
+    scene_id: Option<&str>,
+    media: &dyn MediaResolver,
+) -> Vec<String> {
+    let scene = match scene_id {
+        Some(id) => project.scenes.iter().find(|scene| scene.id == id),
+        None => project
+            .scenes
+            .iter()
+            .find(|scene| scene.id == project.current_scene_id)
+            .or_else(|| project.scenes.first()),
+    };
+    let mut missing: Vec<String> = Vec::new();
+    for track in scene.into_iter().flat_map(|scene| scene.tracks.all()) {
+        if track_hidden(track) {
+            continue;
+        }
+        for element in track.elements() {
+            let Some(params) = visual_params(element) else {
+                continue;
+            };
+            if params.hidden || missing.iter().any(|id| id == params.media_id) {
+                continue;
+            }
+            if media.resolve(params.media_id).is_none() {
+                missing.push(params.media_id.to_owned());
+            }
+        }
+    }
+    missing
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ElementRect {
     pub center_x: f32,
@@ -127,6 +160,7 @@ pub struct FrameComposer {
     staging: StagingRing,
     budget: MemoryBudget,
     scratch: Scratch,
+    strict_media: bool,
 }
 
 #[derive(Default)]
@@ -243,7 +277,16 @@ impl FrameComposer {
             staging: StagingRing::default(),
             budget,
             scratch: Scratch::default(),
+            strict_media: false,
         })
+    }
+
+    pub fn set_strict_media(&mut self, strict: bool) {
+        self.strict_media = strict;
+    }
+
+    pub fn strict_media(&self) -> bool {
+        self.strict_media
     }
 
     pub fn budget(&self) -> MemoryBudget {
@@ -573,6 +616,23 @@ impl FrameComposer {
                     }
                     continue;
                 }
+                if let TimelineElement::Effect(effect) = element {
+                    if !is_visible(element, request.time) {
+                        continue;
+                    }
+                    let passes = crate::effects_map::effect_passes(
+                        &effect.effect_type,
+                        &effect.params,
+                        request.width,
+                        request.height,
+                    );
+                    if !passes.is_empty() {
+                        items.push(FrameItemDescriptor::SceneEffect {
+                            effect_pass_groups: vec![passes],
+                        });
+                    }
+                    continue;
+                }
                 let Some(params) = visual_params(element) else {
                     skipped.push(element_kind(element).to_owned());
                     continue;
@@ -581,7 +641,11 @@ impl FrameComposer {
                     continue;
                 }
                 let Some(path) = media.resolve(params.media_id) else {
-                    return Err(PlaybackError::MediaNotFound(params.media_id.to_owned()));
+                    if self.strict_media {
+                        return Err(PlaybackError::MediaNotFound(params.media_id.to_owned()));
+                    }
+                    skipped.push(format!("media-missing:{}", params.media_id));
+                    continue;
                 };
 
                 let base = element.base();
@@ -598,9 +662,17 @@ impl FrameComposer {
                     let source = source.max(MediaTime::ZERO);
                     source_ticks = Some(source.as_ticks() as f64);
                     self.cache
-                        .video_frame(params.media_id, &path, source.to_seconds_f64())?
+                        .video_frame(params.media_id, &path, source.to_seconds_f64())
                 } else {
-                    self.cache.still_frame(params.media_id, &path)?
+                    self.cache.still_frame(params.media_id, &path)
+                };
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(error) if self.strict_media => return Err(error),
+                    Err(_) => {
+                        skipped.push(format!("media-decode:{}", params.media_id));
+                        continue;
+                    }
                 };
 
                 let local = element_local_time(element, request.time);

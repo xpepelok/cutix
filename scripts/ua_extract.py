@@ -14,7 +14,6 @@ ITEM = re.compile(
 )
 USE = re.compile(r"^\s*(?:pub\s+)?use\s+([^;]+);")
 
-
 def rust_files():
     for root in RUST_ROOTS:
         for base, dirs, names in os.walk(root):
@@ -23,7 +22,6 @@ def rust_files():
                 if name.endswith(".rs"):
                     yield os.path.join(base, name)
 
-
 def crate_of(path):
     rel = os.path.relpath(path, ROOT).replace("\\", "/")
     if rel.startswith("crates/"):
@@ -31,7 +29,6 @@ def crate_of(path):
     if rel.startswith("apps/native/src"):
         return "cutix"
     return "?"
-
 
 def strip_doc(lines):
     out = []
@@ -42,7 +39,6 @@ def strip_doc(lines):
         elif text.startswith("//!"):
             out.append(text[3:].strip())
     return "\n".join(out).strip()
-
 
 def parse_rust(path):
     with io.open(path, encoding="utf-8", errors="replace") as handle:
@@ -94,7 +90,6 @@ def parse_rust(path):
         "items": items,
     }
 
-
 def main():
     index = [parse_rust(path) for path in sorted(rust_files())]
     target = sys.argv[1]
@@ -102,6 +97,5 @@ def main():
     with io.open(target, "w", encoding="utf-8", newline="\n") as handle:
         json.dump(index, handle, ensure_ascii=False, indent=1)
     print(len(index), "files", sum(len(entry["items"]) for entry in index), "items")
-
 
 main()

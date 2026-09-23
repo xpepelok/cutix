@@ -54,6 +54,7 @@ struct FfmpegMp4Backend {
     sink: Mp4Sink,
     spec: VideoSpec,
     encoder: H264Encoder,
+    flushed: bool,
     y: Vec<u8>,
     u: Vec<u8>,
     v: Vec<u8>,
@@ -82,6 +83,7 @@ impl FfmpegMp4Backend {
             sink,
             spec,
             encoder,
+            flushed: false,
             y: vec![0u8; luma],
             u: vec![0u8; luma / 4],
             v: vec![0u8; luma / 4],
@@ -99,6 +101,11 @@ impl EncoderBackend for FfmpegMp4Backend {
     }
 
     fn push_frame(&mut self, rgba: &[u8]) -> Result<()> {
+        if self.flushed {
+            return Err(ExportError::Encoder(
+                "a frame arrived after the encoder was drained for audio".to_string(),
+            ));
+        }
         let width = self.spec.width as usize;
         let height = self.spec.height as usize;
         let expected = width * height * 4;
@@ -127,15 +134,29 @@ impl EncoderBackend for FfmpegMp4Backend {
     }
 
     fn push_audio(&mut self, audio: &AudioBuffer) -> Result<()> {
+        if !audio.interleaved.is_empty() {
+            self.flush_encoder()?;
+        }
         self.sink.push_audio(audio)
     }
 
     fn finish(mut self: Box<Self>) -> Result<ExportArtifacts> {
+        self.flush_encoder()?;
+        self.sink.finish()
+    }
+}
+
+impl FfmpegMp4Backend {
+    fn flush_encoder(&mut self) -> Result<()> {
+        if self.flushed {
+            return Ok(());
+        }
+        self.flushed = true;
         let packets = self.encoder.finish().map_err(ExportError::Encoder)?;
         for packet in packets {
             self.sink.push_annex_b(&packet.bytes, packet.is_sync)?;
         }
-        self.sink.finish()
+        Ok(())
     }
 }
 
@@ -146,6 +167,49 @@ mod tests {
     #[test]
     fn the_factory_name_is_distinct_from_the_shipped_one() {
         assert_ne!(NAME, crate::openh264_mp4::OPENH264_MP4.name());
+    }
+
+    #[test]
+    fn an_export_shorter_than_the_encoder_lookahead_still_takes_its_audio() {
+        if !FFMPEG_MP4.is_available() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("short.mp4");
+        let (width, height) = (320u32, 240u32);
+        let spec = VideoSpec {
+            width,
+            height,
+            frame_rate: time::FrameRate::FPS_30,
+            bitrate_bps: 1_000_000,
+            quality: crate::presets::ExportQuality::Medium,
+        };
+        let mut backend = FfmpegMp4Backend::new(&path, spec).expect("backend");
+        let frame = vec![128u8; width as usize * height as usize * 4];
+        for _ in 0..5 {
+            backend.push_frame(&frame).expect("frame");
+        }
+        if backend.sink.frames() > 0 {
+            eprintln!(
+                "SKIPPED: {} emitted packets before the audio",
+                chosen_encoder().unwrap_or("the encoder")
+            );
+            return;
+        }
+        let audio = AudioBuffer {
+            sample_rate: 48_000,
+            channels: 2,
+            interleaved: (0..48_000 / 6)
+                .flat_map(|index| {
+                    let value = (index as f32 * 0.05).sin() * 0.3;
+                    [value, value]
+                })
+                .collect(),
+        };
+        backend.push_audio(&audio).expect("audio after five frames");
+        let artifacts = Box::new(backend).finish().expect("finish");
+        assert_eq!(artifacts.frames, 5);
+        assert!(artifacts.audio_samples > 0);
     }
 
     #[test]

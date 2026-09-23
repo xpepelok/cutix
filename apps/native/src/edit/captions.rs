@@ -1,6 +1,3 @@
-//! Subtitles: the style they are rendered with, where they sit on the canvas, and
-//! the conversion between timeline text elements and subtitle cues.
-
 use super::*;
 
 impl Editor<'_> {

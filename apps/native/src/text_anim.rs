@@ -328,8 +328,6 @@ pub fn key_time(start: MediaTime, offset: f64, window: MediaTime) -> MediaTime {
     MediaTime::from_ticks(start.as_ticks() + (offset * window.as_ticks() as f64).round() as i64)
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn character_reveal_progress(progress: f64, index: usize, count: usize, style: &str) -> f64 {
     if count == 0 {
@@ -356,8 +354,6 @@ pub fn character_reveal_progress(progress: f64, index: usize, count: usize, styl
     ((progress - start) / span).clamp(0.0, 1.0)
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn character_reveal_scale(progress: f64, style: &str) -> f64 {
     if style != "char-pop" || progress >= 1.0 {
@@ -370,18 +366,12 @@ pub fn character_reveal_scale(progress: f64, style: &str) -> f64 {
     POP_MIN_SCALE + (1.0 - POP_MIN_SCALE) * eased
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 const BACK_OVERSHOOT: f64 = 1.70158;
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 const POP_MIN_SCALE: f64 = 0.35;
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 const STAGGER_SPREAD: f64 = 0.75;
 

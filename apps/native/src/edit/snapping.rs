@@ -1,5 +1,3 @@
-//! Snapping a dragged time to whatever is near it.
-
 use super::*;
 
 pub fn snap_time(

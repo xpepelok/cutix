@@ -137,55 +137,111 @@ pub fn compute_watermark_tile_rects(
     source_size: SourceSize,
     watermark: &TWatermark,
 ) -> Vec<WatermarkRect> {
+    let (lattice, base_step_x, base_step_y) = tile_lattice(canvas_size, source_size, watermark);
+
+    let covered_width = canvas_size.width + 2.0 * lattice.cull_radius;
+    let covered_height = canvas_size.height + 2.0 * lattice.cull_radius;
+    let estimated_tiles = covered_width * covered_height / (base_step_x * base_step_y);
+    let mut stretch = if estimated_tiles > MAX_WATERMARK_TILES as f64 {
+        (estimated_tiles / MAX_WATERMARK_TILES as f64).sqrt()
+    } else {
+        1.0
+    };
+    loop {
+        let rects = lattice.rects(base_step_x * stretch, base_step_y * stretch);
+        if rects.len() <= MAX_WATERMARK_TILES || !stretch.is_finite() {
+            return rects;
+        }
+        stretch *= 1.05;
+    }
+}
+
+fn tile_lattice(
+    canvas_size: CanvasSize,
+    source_size: SourceSize,
+    watermark: &TWatermark,
+) -> (TileLattice, f64, f64) {
     let (width, height) = compute_watermark_size(canvas_size, source_size, watermark);
     let spacing = clamp_watermark_tile_spacing(watermark.tiling.spacing);
-    let step_x = (width * (1.0 + spacing)).max(1.0);
-    let step_y = (height * (1.0 + spacing)).max(1.0);
+    let base_step_x = (width * (1.0 + spacing)).max(1.0);
+    let base_step_y = (height * (1.0 + spacing)).max(1.0);
 
     let lattice_angle = finite(watermark.tiling.angle);
     let radians = lattice_angle * std::f64::consts::PI / 180.0;
-    let cos = radians.cos();
-    let sin = radians.sin();
+    let lattice = TileLattice {
+        canvas_size,
+        width,
+        height,
+        cos: radians.cos(),
+        sin: radians.sin(),
+        origin_x: canvas_size.width / 2.0 + finite(watermark.offset.x) * canvas_size.width,
+        origin_y: canvas_size.height / 2.0 + finite(watermark.offset.y) * canvas_size.height,
+        rotation: finite(watermark.rotation) + lattice_angle,
+        cull_radius: width.hypot(height) / 2.0,
+    };
+    (lattice, base_step_x, base_step_y)
+}
 
-    let reach = (canvas_size.width.hypot(canvas_size.height)) / 2.0;
-    let count_x = (reach / step_x).ceil() as i64 + 1;
-    let count_y = (reach / step_y).ceil() as i64 + 1;
+struct TileLattice {
+    canvas_size: CanvasSize,
+    width: f64,
+    height: f64,
+    cos: f64,
+    sin: f64,
+    origin_x: f64,
+    origin_y: f64,
+    rotation: f64,
+    cull_radius: f64,
+}
 
-    let origin_x = canvas_size.width / 2.0 + finite(watermark.offset.x) * canvas_size.width;
-    let origin_y = canvas_size.height / 2.0 + finite(watermark.offset.y) * canvas_size.height;
-    let rotation = finite(watermark.rotation) + lattice_angle;
-    let cull_radius = width.hypot(height) / 2.0;
-
-    let mut rects: Vec<WatermarkRect> = Vec::new();
-    for j in -count_y..=count_y {
-        for i in -count_x..=count_x {
-            let local_x = i as f64 * step_x;
-            let local_y = j as f64 * step_y;
-            let center_x = origin_x + local_x * cos - local_y * sin;
-            let center_y = origin_y + local_x * sin + local_y * cos;
-
-            if center_x + cull_radius < 0.0
-                || center_y + cull_radius < 0.0
-                || center_x - cull_radius > canvas_size.width
-                || center_y - cull_radius > canvas_size.height
-            {
-                continue;
-            }
-
-            rects.push(WatermarkRect {
-                x: center_x - width / 2.0,
-                y: center_y - height / 2.0,
-                width,
-                height,
-                rotation,
-            });
-            if rects.len() >= MAX_WATERMARK_TILES {
-                return rects;
-            }
-        }
+impl TileLattice {
+    fn reach(&self) -> f64 {
+        let corners = [
+            (0.0, 0.0),
+            (self.canvas_size.width, 0.0),
+            (0.0, self.canvas_size.height),
+            (self.canvas_size.width, self.canvas_size.height),
+        ];
+        corners
+            .iter()
+            .map(|(x, y)| (x - self.origin_x).hypot(y - self.origin_y))
+            .fold(0.0, f64::max)
+            + self.cull_radius
     }
 
-    rects
+    fn rects(&self, step_x: f64, step_y: f64) -> Vec<WatermarkRect> {
+        let canvas_size = self.canvas_size;
+        let reach = self.reach();
+        let count_x = (reach / step_x).ceil() as i64 + 1;
+        let count_y = (reach / step_y).ceil() as i64 + 1;
+
+        let mut rects: Vec<WatermarkRect> = Vec::new();
+        for j in -count_y..=count_y {
+            for i in -count_x..=count_x {
+                let local_x = i as f64 * step_x;
+                let local_y = j as f64 * step_y;
+                let center_x = self.origin_x + local_x * self.cos - local_y * self.sin;
+                let center_y = self.origin_y + local_x * self.sin + local_y * self.cos;
+
+                if center_x + self.cull_radius < 0.0
+                    || center_y + self.cull_radius < 0.0
+                    || center_x - self.cull_radius > canvas_size.width
+                    || center_y - self.cull_radius > canvas_size.height
+                {
+                    continue;
+                }
+
+                rects.push(WatermarkRect {
+                    x: center_x - self.width / 2.0,
+                    y: center_y - self.height / 2.0,
+                    width: self.width,
+                    height: self.height,
+                    rotation: self.rotation,
+                });
+            }
+        }
+        rects
+    }
 }
 
 pub fn watermark_rect_to_transform(
@@ -459,6 +515,116 @@ mod tests {
         for index in 0..full.len() {
             assert!((small[index].x / 640.0 - full[index].x / 1920.0).abs() < 1e-8);
             assert!((small[index].y / 360.0 - full[index].y / 1080.0).abs() < 1e-8);
+        }
+    }
+
+    #[test]
+    fn dense_tiling_stays_under_the_cap_and_still_covers_top_and_bottom() {
+        let mut mark = tiled();
+        mark.size = MIN_WATERMARK_SIZE;
+        mark.tiling.spacing = MIN_WATERMARK_TILE_SPACING;
+        mark.tiling.angle = 20.0;
+        let rects = compute_watermark_tile_rects(CANVAS, SOURCE, &mark);
+        assert!(rects.len() <= MAX_WATERMARK_TILES);
+        assert!(rects.len() > MAX_WATERMARK_TILES / 2);
+
+        let centers_y: Vec<f64> = rects
+            .iter()
+            .map(|rect| rect.y + rect.height / 2.0)
+            .collect();
+        let top = centers_y.iter().copied().fold(f64::INFINITY, f64::min);
+        let bottom = centers_y.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(top < CANVAS.height * 0.1, "top tile at {top}");
+        assert!(bottom > CANVAS.height * 0.9, "bottom tile at {bottom}");
+
+        let centers_x: Vec<f64> = rects.iter().map(|rect| rect.x + rect.width / 2.0).collect();
+        let left = centers_x.iter().copied().fold(f64::INFINITY, f64::min);
+        let right = centers_x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(left < CANVAS.width * 0.1, "left tile at {left}");
+        assert!(right > CANVAS.width * 0.9, "right tile at {right}");
+    }
+
+    fn brute_force_centers(lattice: &TileLattice, step_x: f64, step_y: f64) -> Vec<(f64, f64)> {
+        let canvas = lattice.canvas_size;
+        let span = canvas.width.max(canvas.height) * 4.0;
+        let count_x = (span / step_x).ceil() as i64;
+        let count_y = (span / step_y).ceil() as i64;
+        let mut centers = Vec::new();
+        for j in -count_y..=count_y {
+            for i in -count_x..=count_x {
+                let local_x = i as f64 * step_x;
+                let local_y = j as f64 * step_y;
+                let x = lattice.origin_x + local_x * lattice.cos - local_y * lattice.sin;
+                let y = lattice.origin_y + local_x * lattice.sin + local_y * lattice.cos;
+                let touches = x + lattice.cull_radius >= 0.0
+                    && y + lattice.cull_radius >= 0.0
+                    && x - lattice.cull_radius <= canvas.width
+                    && y - lattice.cull_radius <= canvas.height;
+                if touches {
+                    centers.push((x, y));
+                }
+            }
+        }
+        sort_centers(&mut centers);
+        centers
+    }
+
+    fn sort_centers(centers: &mut [(f64, f64)]) {
+        centers.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap()
+                .then(a.1.partial_cmp(&b.1).unwrap())
+        });
+    }
+
+    #[test]
+    fn an_offset_lattice_still_reaches_the_far_corner() {
+        let square = CanvasSize {
+            width: 1080.0,
+            height: 1080.0,
+        };
+        let tall = SourceSize {
+            width: 200.0,
+            height: 400.0,
+        };
+        let cases = [
+            (square, tall, 0.01, 0.05, 45.0),
+            (square, tall, 0.02, 0.6, 45.0),
+            (square, tall, 0.015, 1.0, 45.0),
+            (CANVAS, SOURCE, 0.03, 0.2, 30.0),
+            (CANVAS, SOURCE, 0.05, 0.6, 30.0),
+        ];
+        for (canvas, source, size, spacing, angle) in cases {
+            let mut mark = tiled();
+            mark.size = size;
+            mark.offset = Vec2 { x: 0.08, y: 0.08 };
+            mark.tiling = TWatermarkTiling {
+                enabled: true,
+                spacing,
+                angle,
+            };
+            let (lattice, step_x, step_y) = tile_lattice(canvas, source, &mark);
+            for stretch in [1.0, 2.5] {
+                let (step_x, step_y) = (step_x * stretch, step_y * stretch);
+                let mut got: Vec<(f64, f64)> = lattice
+                    .rects(step_x, step_y)
+                    .iter()
+                    .map(|rect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+                    .collect();
+                sort_centers(&mut got);
+                let wanted = brute_force_centers(&lattice, step_x, step_y);
+                assert_eq!(
+                    got.len(),
+                    wanted.len(),
+                    "size {size} spacing {spacing} angle {angle} stretch {stretch}: \
+                     {} of {} visible tiles found",
+                    got.len(),
+                    wanted.len()
+                );
+                for (a, b) in got.iter().zip(&wanted) {
+                    assert!((a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6);
+                }
+            }
         }
     }
 

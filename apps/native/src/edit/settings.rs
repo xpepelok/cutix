@@ -1,5 +1,3 @@
-//! Non-numeric element settings, and the keyframe channels a setting writes into.
-
 use super::*;
 
 #[derive(Clone, Debug, PartialEq)]

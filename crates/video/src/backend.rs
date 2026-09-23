@@ -231,13 +231,6 @@ pub fn dynamic_range(path: impl AsRef<Path>) -> Option<ffmpeg::DynamicRange> {
     }
 }
 
-/// An open video source, decoded by whichever backend could read it.
-///
-/// The two variants are far apart in size because the FFmpeg one carries its scaler cache
-/// and frame buffers inline. They are not boxed: exactly one of these exists per open
-/// clip, it is created once and then read from for the life of the clip, so the size of
-/// the enum costs a single stack slot while boxing would add an indirection to every
-/// frame read.
 #[allow(clippy::large_enum_variant)]
 pub enum VideoStream {
     Native(decode::NativeStream),

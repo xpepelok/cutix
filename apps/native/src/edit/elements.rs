@@ -1,6 +1,3 @@
-//! Element-level state that is not a field: cutouts, motion, masks, keyframe
-//! presence, and building a new element from a media asset.
-
 use super::*;
 
 pub(crate) fn cutout_mut(element: &mut TimelineElement) -> Option<&mut Option<Value>> {

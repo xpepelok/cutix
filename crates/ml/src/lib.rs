@@ -1,3 +1,4 @@
+mod download;
 pub mod matte;
 mod mel;
 pub mod models;

@@ -34,10 +34,12 @@ pub fn saved_path() -> Option<PathBuf> {
 }
 
 pub fn load_saved() -> SavedSounds {
-    saved_path()
+    let mut saved: SavedSounds = saved_path()
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    saved.repair_download_urls();
+    saved
 }
 
 pub fn save_saved(saved: &SavedSounds) {
@@ -51,6 +53,14 @@ pub fn save_saved(saved: &SavedSounds) {
 }
 
 impl SavedSounds {
+    pub fn repair_download_urls(&mut self) -> usize {
+        self.entries
+            .iter_mut()
+            .map(|entry| entry.repair_download_url())
+            .filter(|&changed| changed)
+            .count()
+    }
+
     pub fn contains(&self, id: &str) -> bool {
         self.entries.iter().any(|entry| entry.id == id)
     }
@@ -198,6 +208,35 @@ mod tests {
         assert!(!saved.toggle(&entry));
         assert!(!saved.contains("a"));
         assert!(saved.entries.is_empty());
+    }
+
+    #[test]
+    fn a_freesound_entry_saved_with_the_oauth_download_is_repaired_on_load() {
+        let raw = r#"{"entries":[{"id":"freesound:1234","name":"Whoosh","description":"",
+            "url":"https://freesound.org/s/1234/",
+            "previewUrl":"https://freesound.org/data/previews/1234-hq.mp3",
+            "downloadUrl":"https://freesound.org/apiv2/sounds/1234/download/",
+            "duration":1.0,"filesize":0,"kind":"wav","username":"someone","tags":[],
+            "license":"CC0","created":"","source":"freesound"},
+            {"id":"archive:album:a.mp3","name":"Dawn","description":"",
+            "url":"https://archive.org/details/album",
+            "previewUrl":"https://archive.org/download/album/a.mp3",
+            "downloadUrl":"https://archive.org/download/album/a.mp3",
+            "duration":222.0,"filesize":0,"kind":"mp3","username":"Netlabel","tags":[],
+            "license":"CC BY 4.0","created":"","source":"archive"}]}"#;
+        let mut saved: SavedSounds = serde_json::from_str(raw).expect("deserialize");
+        assert_eq!(saved.repair_download_urls(), 1);
+        assert_eq!(
+            saved.entries[0].download_url.as_deref(),
+            Some("https://freesound.org/data/previews/1234-hq.mp3"),
+            "the file the timeline can actually fetch"
+        );
+        assert_eq!(
+            saved.entries[1].download_url.as_deref(),
+            Some("https://archive.org/download/album/a.mp3"),
+            "other providers are left alone"
+        );
+        assert_eq!(saved.repair_download_urls(), 0);
     }
 
     #[test]

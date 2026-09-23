@@ -14,11 +14,11 @@ fn is_softening_vowel(letter: char) -> bool {
 }
 
 fn is_always_hard(letter: char) -> bool {
-    matches!(letter, 'ж' | 'ш' | 'ц')
+    matches!(letter, 'ж' | 'ш' | 'ц' | 'ʣ')
 }
 
 fn is_always_soft(letter: char) -> bool {
-    matches!(letter, 'ч' | 'щ' | 'й')
+    matches!(letter, 'ч' | 'щ' | 'й' | 'ʥ')
 }
 
 fn is_consonant(letter: char) -> bool {
@@ -44,6 +44,9 @@ fn is_consonant(letter: char) -> bool {
             | 'ч'
             | 'ш'
             | 'щ'
+            | 'ʣ'
+            | 'ʥ'
+            | 'ɣ'
     )
 }
 
@@ -75,7 +78,7 @@ fn voiceless_pair(letter: char) -> Option<char> {
 }
 
 fn is_voiced_obstruent(letter: char) -> bool {
-    voiced_pair(letter).is_some()
+    voiced_pair(letter).is_some() || matches!(letter, 'ʣ' | 'ʥ' | 'ɣ')
 }
 
 fn is_voiceless_obstruent(letter: char) -> bool {
@@ -130,6 +133,8 @@ fn transliterate_latin(letter: char) -> &'static str {
     }
 }
 
+const MAX_NUMBER_DIGITS: usize = 18;
+
 pub fn normalise(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut digits = String::new();
@@ -138,7 +143,16 @@ pub fn normalise(text: &str) -> String {
         if digits.is_empty() {
             return;
         }
-        let words = number_to_words(digits.parse::<u64>().unwrap_or(0));
+        let words = if digits.len() > MAX_NUMBER_DIGITS {
+            digits
+                .chars()
+                .filter_map(|digit| digit.to_digit(10))
+                .map(|digit| ONES[digit as usize])
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            number_to_words(digits.parse::<u64>().unwrap_or(0))
+        };
         if !output.is_empty() && !output.ends_with(' ') {
             output.push(' ');
         }
@@ -154,9 +168,7 @@ pub fn normalise(text: &str) -> String {
             other => other,
         };
         if symbol.is_ascii_digit() {
-            if digits.len() < 18 {
-                digits.push(symbol);
-            }
+            digits.push(symbol);
             continue;
         }
         flush(&mut digits, &mut output);
@@ -274,11 +286,14 @@ pub fn number_to_words(value: u64) -> String {
         return ONES[0].to_string();
     }
 
-    const SCALES: [([&str; 3], bool); 4] = [
+    const SCALES: [([&str; 3], bool); 7] = [
         (["", "", ""], false),
         (["тысяча", "тысячи", "тысяч"], true),
         (["миллион", "миллиона", "миллионов"], false),
         (["миллиард", "миллиарда", "миллиардов"], false),
+        (["триллион", "триллиона", "триллионов"], false),
+        (["квадриллион", "квадриллиона", "квадриллионов"], false),
+        (["квинтиллион", "квинтиллиона", "квинтиллионов"], false),
     ];
 
     let mut groups = Vec::new();
@@ -901,6 +916,34 @@ mod tests {
     }
 
     #[test]
+    fn large_numbers_use_their_own_scale_names() {
+        assert_eq!(number_to_words(2_000_000_000), "два миллиарда");
+        assert_eq!(number_to_words(3_000_000_000_000), "три триллиона");
+        assert_eq!(number_to_words(1_000_000_000_000_000), "один квадриллион");
+        assert_eq!(
+            number_to_words(5_000_000_000_000_000_000),
+            "пять квинтиллионов"
+        );
+        assert_eq!(
+            number_to_words(1_000_001_000_000_000),
+            "один квадриллион один миллиард"
+        );
+        assert!(!number_to_words(u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn digit_runs_longer_than_a_number_are_read_digit_by_digit() {
+        assert_eq!(
+            normalise("код 1234567890123456789"),
+            "код один два три четыре пять шесть семь восемь девять ноль один два три четыре пять шесть семь восемь девять"
+        );
+        assert_eq!(
+            normalise("999999999999999999"),
+            number_to_words(999_999_999_999_999_999)
+        );
+    }
+
+    #[test]
     fn digits_inside_text_are_expanded() {
         assert_eq!(normalise("мне 42 года"), "мне сорок два года");
         assert!(normalise("год 2024").contains("тысячи"));
@@ -1038,6 +1081,18 @@ mod tests {
             "{}",
             word_to_ipa("лодка")
         );
+    }
+
+    #[test]
+    fn voiced_allophones_survive_transcription() {
+        let ipa = word_to_ipa("плацдарм");
+        assert!(ipa.contains("dzd"), "{ipa}");
+        let ipa = word_to_ipa("мачдо");
+        assert!(ipa.contains("dʑd"), "{ipa}");
+        let ipa = word_to_ipa("вокзал");
+        assert!(ipa.contains("ɡz"), "{ipa}");
+        let ipa = word_to_ipa("мохбы");
+        assert!(ipa.contains("ɣb"), "{ipa}");
     }
 
     #[test]

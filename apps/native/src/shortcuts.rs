@@ -31,10 +31,8 @@ impl ShortcutsState {
     }
 }
 
-/// An action together with every chord currently bound to it.
 pub type BoundAction = (Action, Vec<Chord>);
 
-/// One section of the shortcut sheet: a category and the actions filed under it.
 pub type ShortcutRow = (Category, Vec<BoundAction>);
 
 pub fn rows(bindings: &Keybindings) -> Vec<ShortcutRow> {
@@ -102,6 +100,7 @@ pub fn dialog(
         .items_center()
         .justify_center()
         .bg(opacity(gpui::black(), BACKDROP_OPACITY))
+        .occlude()
         .child(
             div()
                 .w(px(DIALOG_WIDTH_PX))

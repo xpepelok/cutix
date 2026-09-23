@@ -68,8 +68,12 @@ fn main() {
         return;
     }
 
+    let mut last = None;
     let outcome = session.upload(&settings, &source, &mut |stage, percent| {
-        println!("  {stage:?} {percent}%");
+        if last != Some((stage, percent)) {
+            last = Some((stage, percent));
+            println!("  {stage:?} {percent}%");
+        }
         Control::Continue
     });
     session.close();

@@ -330,7 +330,7 @@ fn a_video_youtube_will_not_take_stops_without_pretending_a_retry_would_help() {
 }
 
 #[test]
-fn an_upload_killed_by_a_restart_comes_back_waiting_and_runs_from_the_beginning() {
+fn an_upload_killed_by_a_restart_runs_from_the_beginning_once_the_person_retries_it() {
     let directory = workspace("restart");
     let mut queue = Queue::default();
     let id = queued(&mut queue, &directory, "clip", 1_000);
@@ -341,9 +341,22 @@ fn an_upload_killed_by_a_restart_comes_back_waiting_and_runs_from_the_beginning(
 
     let mut reloaded = Queue::load(&directory);
     let task = reloaded.get(&id).expect("task");
-    assert_eq!(task.state, TaskState::Waiting);
+    assert!(
+        matches!(task.state, TaskState::Failed { .. }),
+        "{:?}",
+        task.state
+    );
+    assert!(
+        task.failure_note()
+            .is_some_and(|note| note.worth_retrying())
+    );
     assert_eq!((task.stage, task.percent), (Stage::Opening, 0));
     assert_eq!(reloaded.running(), None);
+    assert!(
+        reloaded.next_waiting().is_none(),
+        "it may already be on YouTube, so it does not start again by itself"
+    );
+    assert!(reloaded.retry(&id));
 
     let cancel = Arc::new(AtomicBool::new(false));
     let result = run_next(

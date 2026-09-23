@@ -1,4 +1,4 @@
-use crate::subtitles::{ParseSubtitleResult, SubtitleCue};
+use crate::subtitles::{ParseSubtitleResult, SubtitleCue, normalize_cue_lines};
 
 pub fn parse_vtt_timestamp(raw: &str) -> Option<f64> {
     let text = raw.trim();
@@ -57,7 +57,7 @@ fn strip_cue_settings(after_arrow: &str) -> &str {
 }
 
 pub fn parse_vtt(input: &str) -> ParseSubtitleResult {
-    let normalized = input.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = normalize_cue_lines(input);
 
     let normalized = normalized.trim_start_matches('\u{feff}');
     let normalized = normalized.trim();
@@ -193,6 +193,20 @@ Backwards\n";
     #[test]
     fn entities_are_decoded() {
         assert_eq!(strip_vtt_tags("a &amp; b &lt;c&gt;"), "a & b <c>");
+    }
+
+    #[test]
+    fn a_separator_line_holding_only_whitespace_still_splits_cues() {
+        let parsed = parse_vtt(
+            "WEBVTT\n  \n00:00:01.000 --> 00:00:02.000\nFirst\n\t\n00:00:03.000 --> 00:00:04.000\nSecond\n",
+        );
+        assert_eq!(parsed.skipped_cue_count, 0);
+        let texts: Vec<&str> = parsed
+            .captions
+            .iter()
+            .map(|cue| cue.text.as_str())
+            .collect();
+        assert_eq!(texts, ["First", "Second"]);
     }
 
     #[test]

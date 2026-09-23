@@ -1,13 +1,15 @@
 use cutix_project::Project;
-use cutix_project::model::{ElementTransition, RetimeConfig, TimelineElement, Track};
+use cutix_project::model::{RetimeConfig, TimelineElement, Track};
 use time::MediaTime;
 
 use crate::animation::{has_channel, scalar_at};
 use crate::audio_decode::{AudioCache, PcmBuffer};
 use crate::error::{PlaybackError, Result};
 use crate::media::MediaResolver;
-use crate::resolve::apply_transition_easing;
-use crate::retime::source_offset_seconds;
+use crate::retime::{effective_rate_at, source_offset_seconds};
+use crate::transitions::{
+    ElementEdges, TransitionRole, build_track_transition_edges, resolve_active_transition,
+};
 
 pub const VOLUME_DB_MIN: f64 = -60.0;
 pub const VOLUME_DB_MAX: f64 = 20.0;
@@ -28,7 +30,6 @@ pub struct AudioBuffer {
 }
 
 impl AudioBuffer {
-    /// How many frames the buffer holds. A buffer with no channels holds none.
     pub fn frame_count(&self) -> usize {
         self.interleaved
             .len()
@@ -61,7 +62,6 @@ struct AudibleElement<'a> {
     media_id: &'a str,
     volume_db: f64,
     retime: Option<&'a RetimeConfig>,
-    transition: Option<&'a ElementTransition>,
 }
 
 fn audible<'a>(track: &'a Track, element: &'a TimelineElement) -> Option<AudibleElement<'a>> {
@@ -82,7 +82,6 @@ fn audible<'a>(track: &'a Track, element: &'a TimelineElement) -> Option<Audible
                 media_id: audio.media_id.as_deref()?,
                 volume_db: audio.volume,
                 retime: audio.retime.as_ref(),
-                transition: None,
             })
         }
         TimelineElement::Video(video) => {
@@ -94,22 +93,58 @@ fn audible<'a>(track: &'a Track, element: &'a TimelineElement) -> Option<Audible
                 media_id: &video.media_id,
                 volume_db: video.volume.unwrap_or(0.0),
                 retime: video.retime.as_ref(),
-                transition: video.transition.as_ref(),
             })
         }
         _ => None,
     }
 }
 
-fn crossfade_gain(transition: Option<&ElementTransition>, local_ticks: f64) -> f64 {
-    let Some(transition) = transition else {
-        return 1.0;
-    };
-    let span = transition.duration.as_ticks() as f64;
-    if span <= 0.0 {
-        return 1.0;
+fn audible_span(element: &TimelineElement, edges: Option<&ElementEdges>) -> (f64, f64) {
+    let base = element.base();
+    let start = base.start_time.to_seconds_f64();
+    let end = start + base.duration.to_seconds_f64();
+    let head = edges
+        .and_then(|edges| edges.incoming.as_ref())
+        .map_or(start, |incoming| {
+            start.min(incoming.start_time.to_seconds_f64())
+        });
+    let tail = edges
+        .and_then(|edges| edges.outgoing.as_ref())
+        .map_or(end, |outgoing| end.max(outgoing.end_time.to_seconds_f64()));
+    (head, tail)
+}
+
+fn audio_edges(
+    edges: &ElementEdges,
+    element: &TimelineElement,
+    retime: Option<&RetimeConfig>,
+) -> ElementEdges {
+    let mut edges = edges.clone();
+    if let Some(incoming) = edges.incoming.as_mut() {
+        let base = element.base();
+        let rate = effective_rate_at(retime, 0.0);
+        let head_ticks = if rate > 0.0 {
+            (base.trim_start.as_ticks() as f64 / rate).round() as i64
+        } else {
+            0
+        };
+        let first_audible = MediaTime::from_ticks(base.start_time.as_ticks() - head_ticks);
+        if first_audible > incoming.start_time {
+            incoming.start_time = first_audible;
+        }
     }
-    apply_transition_easing(local_ticks / span, transition.easing.as_deref()).clamp(0.0, 1.0)
+    edges
+}
+
+fn transition_gain(edges: Option<&ElementEdges>, time: MediaTime) -> f64 {
+    match resolve_active_transition(edges, time) {
+        Some(active) => match active.role {
+            TransitionRole::Incoming => active.progress,
+            TransitionRole::Outgoing => 1.0 - active.progress,
+        }
+        .clamp(0.0, 1.0),
+        None => 1.0,
+    }
 }
 
 fn sample_at(buffer: &PcmBuffer, channel: usize, source_seconds: f64) -> f32 {
@@ -128,6 +163,56 @@ fn sample_at(buffer: &PcmBuffer, channel: usize, source_seconds: f64) -> f32 {
     let upper = (lower + 1).min(data.len() - 1);
     let fraction = (index - lower as f64) as f32;
     data[lower] * (1.0 - fraction) + data[upper] * fraction
+}
+
+fn mapped_sample(buffer: &PcmBuffer, output: usize, outputs: usize, source_seconds: f64) -> f32 {
+    let sources = buffer.channels.min(buffer.samples.len());
+    if sources == 0 {
+        return 0.0;
+    }
+    if sources == outputs {
+        return sample_at(buffer, output, source_seconds);
+    }
+    if sources == 1 {
+        return sample_at(buffer, 0, source_seconds);
+    }
+    if outputs == 1 {
+        let sum: f32 = (0..sources)
+            .map(|channel| sample_at(buffer, channel, source_seconds))
+            .sum();
+        return sum / sources as f32;
+    }
+    if outputs == 2 && sources >= 3 {
+        return fold_surround_into_stereo(buffer, output, sources, source_seconds);
+    }
+    if output < sources.min(outputs) {
+        return sample_at(buffer, output, source_seconds);
+    }
+    0.0
+}
+
+const FOLD_WEIGHT: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+fn fold_surround_into_stereo(
+    buffer: &PcmBuffer,
+    output: usize,
+    sources: usize,
+    source_seconds: f64,
+) -> f32 {
+    let mut value = sample_at(buffer, output, source_seconds);
+    let mut weight = 1.0f32;
+    if sources > 2 {
+        value += FOLD_WEIGHT * sample_at(buffer, 2, source_seconds);
+        weight += FOLD_WEIGHT;
+    }
+    for pair in [4usize, 6] {
+        let channel = pair + output;
+        if channel < sources {
+            value += FOLD_WEIGHT * sample_at(buffer, channel, source_seconds);
+            weight += FOLD_WEIGHT;
+        }
+    }
+    value / weight
 }
 
 pub fn mix(
@@ -162,13 +247,17 @@ pub fn mix(
     let range_end = range_start + request.duration.to_seconds_f64();
 
     for track in scene.tracks.all() {
+        let transition_edges = build_track_transition_edges(track);
         for element in track.elements() {
             let Some(entry) = audible(track, element) else {
                 continue;
             };
             let base = entry.element.base();
-            let element_start = base.start_time.to_seconds_f64();
-            let element_end = base.start_time.to_seconds_f64() + base.duration.to_seconds_f64();
+            let edges = transition_edges
+                .get(base.id.as_str())
+                .map(|edges| audio_edges(edges, entry.element, entry.retime));
+            let edges = edges.as_ref();
+            let (element_start, element_end) = audible_span(entry.element, edges);
             if element_end <= range_start || element_start >= range_end {
                 continue;
             }
@@ -187,15 +276,21 @@ pub fn mix(
             let animations = base.animations.as_ref();
             let animated_volume = has_channel(animations, "volume");
             let trim_start = base.trim_start.to_seconds_f64();
+            let clip_start = base.start_time.to_seconds_f64();
+            let head_rate = effective_rate_at(entry.retime, 0.0);
 
             for frame in 0..frames {
                 let timeline_seconds = range_start + frame as f64 / sample_rate as f64;
-                let clip_seconds = timeline_seconds - element_start;
-                if clip_seconds < 0.0 || clip_seconds >= base.duration.to_seconds_f64() {
+                if timeline_seconds < element_start || timeline_seconds >= element_end {
                     continue;
                 }
-                let source_seconds = trim_start + source_offset_seconds(entry.retime, clip_seconds);
-                let local_ticks = clip_seconds * time::TICKS_PER_SECOND as f64;
+                let clip_seconds = timeline_seconds - clip_start;
+                let source_seconds = if clip_seconds >= 0.0 {
+                    trim_start + source_offset_seconds(entry.retime, clip_seconds)
+                } else {
+                    trim_start + clip_seconds * head_rate
+                };
+                let local_ticks = clip_seconds.max(0.0) * time::TICKS_PER_SECOND as f64;
                 let base_db = if animated_volume {
                     scalar_at(
                         animations,
@@ -206,12 +301,16 @@ pub fn mix(
                 } else {
                     entry.volume_db
                 };
-                let gain = db_to_linear(base_db) * crossfade_gain(entry.transition, local_ticks);
+                let timeline_time = MediaTime::from_ticks(
+                    (timeline_seconds * time::TICKS_PER_SECOND as f64).round() as i64,
+                );
+                let gain = db_to_linear(base_db) * transition_gain(edges, timeline_time);
                 if gain == 0.0 {
                     continue;
                 }
                 for channel in 0..channels {
-                    let value = sample_at(&buffer, channel, source_seconds) * gain as f32;
+                    let value =
+                        mapped_sample(&buffer, channel, channels, source_seconds) * gain as f32;
                     interleaved[frame * channels + channel] += value;
                 }
             }
@@ -226,4 +325,218 @@ pub fn mix(
         },
         skipped,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PcmBuffer, audible_span, mapped_sample, transition_gain};
+    use crate::transitions::build_track_transition_edges;
+    use cutix_project::model::Track;
+    use serde_json::json;
+    use time::{MediaTime, TICKS_PER_SECOND};
+
+    fn at(seconds: f64) -> MediaTime {
+        MediaTime::from_ticks((seconds * TICKS_PER_SECOND as f64).round() as i64)
+    }
+
+    fn clip(
+        id: &str,
+        start: f64,
+        duration: f64,
+        transition_seconds: Option<f64>,
+    ) -> serde_json::Value {
+        let mut value = json!({
+            "type": "video",
+            "id": id,
+            "name": id,
+            "duration": at(duration).as_ticks(),
+            "startTime": at(start).as_ticks(),
+            "trimStart": 0,
+            "trimEnd": 0,
+            "mediaId": id,
+            "transform": { "scaleX": 1.0, "scaleY": 1.0, "position": { "x": 0.0, "y": 0.0 }, "rotate": 0.0 },
+            "opacity": 1.0
+        });
+        if let Some(seconds) = transition_seconds {
+            value["transition"] = json!({
+                "type": "crossfade",
+                "duration": at(seconds).as_ticks(),
+                "easing": "linear"
+            });
+        }
+        value
+    }
+
+    fn video_track(elements: Vec<serde_json::Value>) -> Track {
+        serde_json::from_value(json!({
+            "type": "video",
+            "id": "main",
+            "name": "Main",
+            "elements": elements,
+            "muted": false,
+            "hidden": false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_audio_crossfade_follows_the_centred_picture_transition() {
+        let track = video_track(vec![
+            clip("a", 0.0, 2.0, None),
+            clip("b", 2.0, 2.0, Some(1.0)),
+        ]);
+        let edges = build_track_transition_edges(&track);
+        let outgoing = edges.get("a");
+        let incoming = edges.get("b");
+
+        assert_eq!(transition_gain(outgoing, at(1.4)), 1.0);
+        assert!((transition_gain(outgoing, at(2.25)) - 0.25).abs() < 1e-6);
+        assert!((transition_gain(incoming, at(2.25)) - 0.75).abs() < 1e-6);
+        assert_eq!(transition_gain(incoming, at(2.6)), 1.0);
+
+        let (_, outgoing_end) = audible_span(&track.elements()[0], outgoing);
+        assert!((outgoing_end - 2.5).abs() < 1e-9, "{outgoing_end}");
+    }
+
+    #[test]
+    fn a_transition_without_a_neighbour_does_not_fade_the_sound_in() {
+        let track = video_track(vec![clip("alone", 1.0, 2.0, Some(1.0))]);
+        let edges = build_track_transition_edges(&track);
+        assert_eq!(transition_gain(edges.get("alone"), at(1.1)), 1.0);
+    }
+
+    #[test]
+    fn an_oversized_transition_is_clamped_to_the_clips_like_the_picture() {
+        let track = video_track(vec![
+            clip("a", 0.0, 2.0, None),
+            clip("b", 2.0, 2.0, Some(10.0)),
+        ]);
+        let edges = build_track_transition_edges(&track);
+        assert!((transition_gain(edges.get("b"), at(2.5)) - 0.75).abs() < 1e-6);
+        assert_eq!(transition_gain(edges.get("b"), at(3.2)), 1.0);
+    }
+
+    fn constant_channels(channels: usize) -> PcmBuffer {
+        PcmBuffer {
+            sample_rate: 1,
+            channels,
+            samples: (0..channels)
+                .map(|channel| vec![(channel + 1) as f32; 2])
+                .collect(),
+        }
+    }
+
+    fn mapped(sources: usize, outputs: usize) -> Vec<f32> {
+        let buffer = constant_channels(sources);
+        (0..outputs)
+            .map(|output| mapped_sample(&buffer, output, outputs, 0.0))
+            .collect()
+    }
+
+    #[test]
+    fn matching_layouts_map_channel_for_channel() {
+        assert_eq!(mapped(2, 2), [1.0, 2.0]);
+        assert_eq!(mapped(6, 6), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn a_mono_source_feeds_every_output_channel() {
+        assert_eq!(mapped(1, 2), [1.0, 1.0]);
+        assert_eq!(mapped(1, 6), [1.0; 6]);
+    }
+
+    #[test]
+    fn a_mono_output_averages_the_source_instead_of_dropping_the_right_channel() {
+        assert_eq!(mapped(2, 1), [1.5]);
+    }
+
+    #[test]
+    fn stereo_into_surround_keeps_right_out_of_the_centre_and_rears() {
+        assert_eq!(mapped(2, 6), [1.0, 2.0, 0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn surround_into_stereo_folds_the_centre_and_rears_and_drops_the_lfe() {
+        let side = std::f32::consts::FRAC_1_SQRT_2;
+        let weight = 1.0 + side + side;
+        let expected = [
+            (1.0 + side * 3.0 + side * 5.0) / weight,
+            (2.0 + side * 3.0 + side * 6.0) / weight,
+        ];
+        let folded = mapped(6, 2);
+        for (channel, (measured, wanted)) in folded.iter().zip(expected).enumerate() {
+            assert!(
+                (measured - wanted).abs() < 1e-5,
+                "channel {channel}: {measured} != {wanted}"
+            );
+        }
+
+        let weight = 1.0 + side * 3.0;
+        let wide = mapped(8, 2);
+        assert!((wide[0] - (1.0 + side * (3.0 + 5.0 + 7.0)) / weight).abs() < 1e-5);
+        assert!((wide[1] - (2.0 + side * (3.0 + 6.0 + 8.0)) / weight).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_full_scale_surround_source_cannot_clip_when_folded_to_stereo() {
+        let buffer = PcmBuffer {
+            sample_rate: 1,
+            channels: 6,
+            samples: vec![vec![1.0f32; 2]; 6],
+        };
+        for output in 0..2 {
+            let value = mapped_sample(&buffer, output, 2, 0.0);
+            assert!(value <= 1.0 + 1e-6 && value > 0.9, "{value}");
+        }
+    }
+
+    #[test]
+    fn different_multichannel_layouts_keep_their_common_channels_one_to_one() {
+        assert_eq!(mapped(6, 8), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 0.0]);
+        assert_eq!(mapped(8, 6), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    }
+
+    #[test]
+    fn an_incoming_clip_is_audible_from_the_start_of_the_centred_window() {
+        let track = video_track(vec![
+            clip("a", 0.0, 2.0, None),
+            clip("b", 2.0, 2.0, Some(1.0)),
+        ]);
+        let edges = build_track_transition_edges(&track);
+        let (incoming_start, incoming_end) = audible_span(&track.elements()[1], edges.get("b"));
+        assert!((incoming_start - 1.5).abs() < 1e-9, "{incoming_start}");
+        assert!((incoming_end - 4.0).abs() < 1e-9, "{incoming_end}");
+    }
+
+    #[test]
+    fn a_short_head_handle_rebases_the_fade_in_to_the_first_audible_sample() {
+        let mut incoming = clip("b", 2.0, 2.0, Some(1.0));
+        incoming["trimStart"] = json!(at(0.2).as_ticks());
+        let track = video_track(vec![clip("a", 0.0, 2.0, None), incoming]);
+        let edges = build_track_transition_edges(&track);
+        let element = &track.elements()[1];
+        let sound = super::audio_edges(edges.get("b").unwrap(), element, None);
+        let rebased = sound.incoming.as_ref().unwrap();
+        assert_eq!(rebased.start_time, at(1.8));
+        assert_eq!(rebased.end_time, at(2.5));
+        assert_eq!(transition_gain(Some(&sound), at(1.8)), 0.0);
+        assert_eq!(transition_gain(Some(&sound), at(2.5)), 1.0);
+
+        let mut long = clip("b", 2.0, 2.0, Some(1.0));
+        long["trimStart"] = json!(at(3.0).as_ticks());
+        let track = video_track(vec![clip("a", 0.0, 2.0, None), long]);
+        let edges = build_track_transition_edges(&track);
+        let sound = super::audio_edges(edges.get("b").unwrap(), &track.elements()[1], None);
+        assert_eq!(sound.incoming.as_ref().unwrap().start_time, at(1.5));
+    }
+
+    #[test]
+    fn a_buffer_without_channels_is_silent() {
+        let buffer = PcmBuffer {
+            sample_rate: 1,
+            channels: 0,
+            samples: Vec::new(),
+        };
+        assert_eq!(mapped_sample(&buffer, 0, 2, 0.0), 0.0);
+    }
 }

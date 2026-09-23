@@ -14,6 +14,8 @@ pub enum Failure {
 
     SignedOut,
 
+    WrongChannel(String),
+
     Timeout(String),
 
     PageChanged(String),
@@ -22,11 +24,16 @@ pub enum Failure {
 
     Cancelled,
     Io(String),
+
+    Interrupted,
 }
 
 impl Failure {
     pub fn is_auth(&self) -> bool {
-        matches!(self, Self::SignedOut | Self::NoChannel)
+        matches!(
+            self,
+            Self::SignedOut | Self::NoChannel | Self::WrongChannel(_)
+        )
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -36,7 +43,11 @@ impl Failure {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::Protocol(_) | Self::Timeout(_) | Self::BrowserLaunch(_) | Self::Io(_)
+            Self::Protocol(_)
+                | Self::Timeout(_)
+                | Self::BrowserLaunch(_)
+                | Self::Io(_)
+                | Self::Interrupted
         )
     }
 
@@ -48,11 +59,13 @@ impl Failure {
             Self::SignInAbandoned => "youtube.error.signInAbandoned",
             Self::NoChannel => "youtube.error.noChannel",
             Self::SignedOut => "youtube.error.signedOut",
+            Self::WrongChannel(_) => "youtube.error.wrongChannel",
             Self::Timeout(_) => "youtube.error.timeout",
             Self::PageChanged(_) => "youtube.error.pageChanged",
             Self::Rejected(_) => "youtube.error.rejected",
             Self::Cancelled => "youtube.error.cancelled",
             Self::Io(_) => "youtube.error.io",
+            Self::Interrupted => "youtube.error.interrupted",
         }
     }
 
@@ -63,12 +76,14 @@ impl Failure {
             | Self::Timeout(message)
             | Self::PageChanged(message)
             | Self::Rejected(message)
+            | Self::WrongChannel(message)
             | Self::Io(message) => message.clone(),
             Self::NoBrowser
             | Self::SignInAbandoned
             | Self::NoChannel
             | Self::SignedOut
-            | Self::Cancelled => String::new(),
+            | Self::Cancelled
+            | Self::Interrupted => String::new(),
         }
     }
 
@@ -111,6 +126,10 @@ impl FailureNote {
     pub fn worth_retrying(&self) -> bool {
         self.retryable || self.auth || self.cancelled
     }
+
+    pub fn interrupted() -> Self {
+        Failure::Interrupted.note()
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +146,21 @@ mod tests {
         );
         assert!(failure.note().worth_retrying());
         assert_eq!(failure.message_key(), "youtube.error.signedOut");
+    }
+
+    #[test]
+    fn signing_back_in_as_the_wrong_channel_names_it_and_leaves_the_row_flagged() {
+        let failure = Failure::WrongChannel("Second Channel".to_string());
+        assert_eq!(failure.message_key(), "youtube.error.wrongChannel");
+        assert_eq!(failure.detail(), "Second Channel");
+        assert!(
+            failure.is_auth(),
+            "the account still has no live session of its own"
+        );
+        assert!(
+            !failure.is_retryable(),
+            "repeating it lands on the same wrong channel"
+        );
     }
 
     #[test]
@@ -179,6 +213,17 @@ mod tests {
     }
 
     #[test]
+    fn an_upload_the_app_closed_on_has_its_own_message_and_waits_for_a_retry() {
+        let failure = Failure::Interrupted;
+        assert_eq!(failure.message_key(), "youtube.error.interrupted");
+        assert_eq!(failure.detail(), "", "the message says it all");
+        assert!(failure.is_retryable(), "one press puts it back");
+        assert!(!failure.is_auth() && !failure.is_cancelled());
+        assert_eq!(FailureNote::interrupted(), failure.note());
+        assert!(FailureNote::interrupted().worth_retrying());
+    }
+
+    #[test]
     fn cancelling_is_reported_as_such_rather_than_as_a_fault() {
         let note = Failure::Cancelled.note();
         assert!(note.cancelled);
@@ -200,6 +245,8 @@ mod tests {
             Failure::Rejected(String::new()),
             Failure::Cancelled,
             Failure::Io(String::new()),
+            Failure::WrongChannel(String::new()),
+            Failure::Interrupted,
         ];
         let mut keys: Vec<&str> = all.iter().map(Failure::message_key).collect();
         keys.sort_unstable();

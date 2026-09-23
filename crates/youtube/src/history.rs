@@ -1,9 +1,13 @@
+use crate::clock::Zone;
 use crate::publish::{Privacy, watch_url};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub const HISTORY_FILE: &str = "youtube-history.json";
 const MAX_ENTRIES: usize = 500;
+
+const STAMPS_ARE_UTC: u32 = 1;
+const CURRENT_FORMAT: u32 = STAMPS_ARE_UTC;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -137,21 +141,50 @@ impl HistoryFilter {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct History {
     #[serde(default)]
     pub entries: Vec<HistoryEntry>,
+    #[serde(default)]
+    format: u32,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            format: CURRENT_FORMAT,
+        }
+    }
 }
 
 impl History {
     pub fn load(directory: &Path) -> Self {
+        Self::load_in(directory, Zone::Local)
+    }
+
+    pub fn load_in(directory: &Path, zone: Zone) -> Self {
         let path = directory.join(HISTORY_FILE);
         let Ok(text) = std::fs::read_to_string(path) else {
             return Self::default();
         };
         let mut history: Self = serde_json::from_str(&text).unwrap_or_default();
+        history.upgrade_format(zone);
         history.sort();
         history
+    }
+
+    fn upgrade_format(&mut self, zone: Zone) {
+        if self.format < STAMPS_ARE_UTC {
+            for entry in &mut self.entries {
+                if let Some(stamp) = entry.scheduled_for.as_deref()
+                    && let Some(converted) = crate::utc_stamp_of_local_digits(stamp, zone)
+                {
+                    entry.scheduled_for = Some(converted);
+                }
+            }
+        }
+        self.format = CURRENT_FORMAT;
     }
 
     pub fn save(&self, directory: &Path) -> std::io::Result<()> {
@@ -161,7 +194,6 @@ impl History {
         std::fs::write(directory.join(HISTORY_FILE), text)
     }
 
-    /// Newest upload first, which is the order the history is read in.
     fn sort(&mut self) {
         self.entries
             .sort_by_key(|entry| std::cmp::Reverse(entry.uploaded_at));
@@ -451,6 +483,51 @@ mod tests {
 
         std::fs::write(directory.join(HISTORY_FILE), "{ not json").expect("corrupt");
         assert_eq!(History::load(&directory), History::default());
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_schedule_recorded_by_the_previous_build_is_read_on_the_clock_it_was_picked_on() {
+        let directory = std::env::temp_dir().join(format!(
+            "cutix-youtube-history-legacy-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("mkdir");
+        let legacy = r#"{"entries":[
+            {"video_id":"aaa","account_id":"chan","title":"later","uploaded_at":1000,
+             "privacy":"private","scheduled_for":"2026-09-23T15:00:00Z"},
+            {"video_id":"bbb","account_id":"chan","title":"now","uploaded_at":2000,
+             "privacy":"public"}
+        ]}"#;
+        std::fs::write(directory.join(HISTORY_FILE), legacy).expect("write");
+
+        let moscow = Zone::Fixed(3 * 3_600);
+        let history = History::load_in(&directory, moscow);
+        let scheduled_for = |id: &str| {
+            history
+                .entries
+                .iter()
+                .find(|entry| entry.video_id == id)
+                .and_then(|entry| entry.scheduled_for.clone())
+        };
+        assert_eq!(
+            scheduled_for("aaa").as_deref(),
+            Some("2026-09-23T12:00:00Z"),
+            "15:00 picked in Moscow is 12:00 UTC"
+        );
+        assert_eq!(scheduled_for("bbb"), None);
+
+        history.save(&directory).expect("save");
+        let text = std::fs::read_to_string(directory.join(HISTORY_FILE)).expect("read");
+        assert!(text.contains("\"format\": 1"));
+        assert_eq!(
+            History::load_in(&directory, moscow),
+            history,
+            "converted once, then left alone"
+        );
 
         let _ = std::fs::remove_dir_all(&directory);
     }

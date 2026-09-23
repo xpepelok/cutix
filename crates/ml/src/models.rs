@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::MlError;
@@ -64,45 +63,7 @@ pub fn ensure_downloaded(
         return Ok(target);
     }
 
-    let directory = target
-        .parent()
-        .ok_or_else(|| MlError::Download("cache path has no parent".to_string()))?;
-    fs::create_dir_all(directory).map_err(|error| MlError::Download(error.to_string()))?;
-
-    let response = ureq::get(model.url)
-        .call()
-        .map_err(|error| MlError::Download(error.to_string()))?;
-
-    let total = response
-        .header("Content-Length")
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-
-    let partial = directory.join(format!("{}.part", model.file_name));
-    let mut file =
-        fs::File::create(&partial).map_err(|error| MlError::Download(error.to_string()))?;
-    let mut reader = response.into_reader();
-    let mut buffer = [0u8; 64 * 1024];
-    let mut written: u64 = 0;
-
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|error| MlError::Download(error.to_string()))?;
-        if read == 0 {
-            break;
-        }
-        std::io::Write::write_all(&mut file, &buffer[..read])
-            .map_err(|error| MlError::Download(error.to_string()))?;
-        written += read as u64;
-        if total > 0 {
-            on_progress((written as f32 / total as f32).clamp(0.0, 1.0));
-        }
-    }
-
-    drop(file);
-    fs::rename(&partial, &target).map_err(|error| MlError::Download(error.to_string()))?;
-    on_progress(1.0);
+    crate::download::download_to(model.url, &target, &mut on_progress, &|| false)?;
     Ok(target)
 }
 

@@ -121,9 +121,6 @@ fn release_profile(profile: &Path) -> bool {
         let _ = std::fs::remove_file(&path);
     }
 
-    // Shadowed rather than mutated: off Windows there are no processes to stop and
-    // nothing reassigns this, so a `mut` here is a warning on every other platform.
-    // `|` rather than `||`, so the processes are stopped whether or not a lock file was.
     #[cfg(windows)]
     let freed = freed | stop_processes_on(profile);
 
@@ -137,37 +134,38 @@ fn hide_console(command: &mut Command) {
 }
 
 #[cfg(windows)]
-fn stop_processes_on(profile: &Path) -> bool {
-    let needle = profile.display().to_string();
-    let mut lister = Command::new("wmic");
-    lister.args([
-        "process",
-        "where",
-        "name='chrome.exe'",
-        "get",
-        "ProcessId,CommandLine",
-        "/format:csv",
-    ]);
+const PROCESS_LISTING: &str = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; \
+     Get-CimInstance Win32_Process -Filter 'Name=''chrome.exe'' OR Name=''msedge.exe''' | \
+     Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation";
+
+#[cfg(windows)]
+fn browser_processes() -> Option<Vec<(u32, String)>> {
+    let mut lister = Command::new("powershell");
+    lister
+        .args(["-NoProfile", "-NonInteractive", "-Command", PROCESS_LISTING])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
     hide_console(&mut lister);
-    let listing = lister.output();
-    let Ok(listing) = listing else {
+    let listing = lister.output().ok()?;
+    Some(parse_process_listing(&String::from_utf8_lossy(
+        &listing.stdout,
+    )))
+}
+
+#[cfg(windows)]
+fn stop_processes_on(profile: &Path) -> bool {
+    let Some(processes) = browser_processes() else {
         return false;
     };
-    let text = String::from_utf8_lossy(&listing.stdout).to_string();
+    let profile = profile.display().to_string();
 
     let mut stopped = false;
-    for line in text.lines() {
-        if !line.contains(&needle) {
-            continue;
-        }
-        let Some(id) = line.rsplit(',').next().map(str::trim) else {
-            continue;
-        };
-        if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+    for (id, command_line) in processes {
+        if !uses_profile(&command_line, &profile) {
             continue;
         }
         let mut kill = Command::new("taskkill");
-        kill.args(["/PID", id, "/T", "/F"])
+        kill.args(["/PID", &id.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         hide_console(&mut kill);
@@ -178,6 +176,97 @@ fn stop_processes_on(profile: &Path) -> bool {
         stopped |= killed;
     }
     stopped
+}
+
+pub fn parse_process_listing(text: &str) -> Vec<(u32, String)> {
+    text.trim_start_matches('\u{feff}')
+        .lines()
+        .filter_map(|line| {
+            let mut fields = csv_fields(line.trim_end_matches('\r')).into_iter();
+            let id = fields.next()?.trim().parse::<u32>().ok()?;
+            Some((id, fields.next().unwrap_or_default()))
+        })
+        .collect()
+}
+
+fn csv_fields(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut characters = line.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '"' if quoted && characters.peek() == Some(&'"') => {
+                field.push('"');
+                characters.next();
+            }
+            '"' => quoted = !quoted,
+            ',' if !quoted => fields.push(std::mem::take(&mut field)),
+            other => field.push(other),
+        }
+    }
+    fields.push(field);
+    fields
+}
+
+pub fn uses_profile(command_line: &str, profile: &str) -> bool {
+    const FLAG: &str = "--user-data-dir=";
+    let line = command_line.to_lowercase();
+    let profile = profile.to_lowercase();
+    if profile.is_empty() {
+        return false;
+    }
+    line.match_indices(FLAG).any(|(at, _)| {
+        let value = &line[at + FLAG.len()..];
+        let value = value.strip_prefix('"').unwrap_or(value);
+        value
+            .strip_prefix(profile.as_str())
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['"', ' ']))
+    })
+}
+
+#[cfg(windows)]
+mod job {
+    use std::os::windows::io::AsRawHandle;
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
+
+    fn job() -> Option<HANDLE> {
+        static JOB: OnceLock<usize> = OnceLock::new();
+        let raw = *JOB.get_or_init(|| unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return 0;
+            }
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set == 0 {
+                CloseHandle(handle);
+                return 0;
+            }
+            handle as usize
+        });
+        (raw != 0).then_some(raw as HANDLE)
+    }
+
+    pub fn adopt(child: &std::process::Child) {
+        if let Some(job) = job() {
+            unsafe {
+                AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE);
+            }
+        }
+    }
 }
 
 impl Browser {
@@ -210,6 +299,8 @@ impl Browser {
             .stdin(Stdio::null())
             .spawn()
             .map_err(|error| Failure::BrowserLaunch(format!("{}: {error}", binary.display())))?;
+        #[cfg(windows)]
+        job::adopt(&child);
 
         let mut browser = Self {
             child,
@@ -383,9 +474,60 @@ mod tests {
     }
 
     #[test]
+    fn the_process_listing_is_read_through_its_quoting() {
+        let text = "\u{feff}\"ProcessId\",\"CommandLine\"\r\n\
+            \"36380\",\"\"\"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\"\" \
+            --type=crashpad-handler \"\"--user-data-dir=C:\\Users\\Иван\\AppData\\cutix\\profiles\\UCa\"\" /prefetch:4\"\r\n\
+            \"4242\",\"\"\r\n\
+            \"not-a-pid\",\"x\"\r\n";
+        let rows = parse_process_listing(text);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].0, 36_380);
+        assert!(
+            rows[0]
+                .1
+                .contains("\"--user-data-dir=C:\\Users\\Иван\\AppData\\cutix\\profiles\\UCa\""),
+            "{}",
+            rows[0].1
+        );
+        assert_eq!(rows[1], (4_242, String::new()));
+    }
+
+    #[test]
+    fn only_a_browser_on_exactly_this_profile_is_matched() {
+        let profile = r"C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCab";
+        for line in [
+            r"chrome.exe --remote-debugging-port=0 --user-data-dir=C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCab --no-first-run",
+            r#"chrome.exe --type=renderer "--user-data-dir=C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCab" --lang=en"#,
+            r#"chrome.exe --type=gpu --user-data-dir="c:\users\me\appdata\roaming\cutix\youtube\profiles\ucab" --x"#,
+            r"chrome.exe --user-data-dir=C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCab",
+        ] {
+            assert!(uses_profile(line, profile), "{line}");
+        }
+        for line in [
+            r"chrome.exe --user-data-dir=C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCabc --x",
+            r"chrome.exe --user-data-dir=C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCab\sub",
+            r"chrome.exe --note=C:\Users\Me\AppData\Roaming\cutix\youtube\profiles\UCab",
+            r"chrome.exe --no-first-run",
+            "",
+        ] {
+            assert!(!uses_profile(line, profile), "{line}");
+        }
+        assert!(
+            !uses_profile("--user-data-dir= --x", ""),
+            "an empty path is never a match"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_process_listing_runs_on_this_windows_and_comes_back_parseable() {
+        let rows = browser_processes().expect("powershell ran");
+        assert!(rows.iter().all(|(id, _)| *id > 0), "{rows:?}");
+    }
+
+    #[test]
     fn an_explicit_browser_path_that_does_not_exist_is_ignored_rather_than_launched() {
-        // Mutating the environment is unsound while another thread may be reading it.
-        // These tests run single-threaded against a variable only this test touches.
         unsafe { std::env::set_var(BROWSER_ENV, "/nowhere/chrome-that-is-not-there") };
         let found = find();
         unsafe { std::env::remove_var(BROWSER_ENV) };

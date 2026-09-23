@@ -10,8 +10,6 @@ fn ffmpeg_ready() -> bool {
     for entry in entries.flatten() {
         let bin = entry.path().join("bin");
         if bin.join("ffmpeg.exe").is_file() || bin.join("ffmpeg").is_file() {
-            // Mutating the environment is unsound while another thread may be reading
-            // it. This probe runs before any decoder thread exists.
             unsafe { std::env::set_var(video::ffmpeg::DIR_ENV, &bin) };
             return video::ffmpeg::can_decode();
         }

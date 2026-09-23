@@ -16,9 +16,41 @@ fn protocol<T: std::fmt::Display>(error: T) -> Failure {
     Failure::Protocol(error.to_string())
 }
 
+#[derive(Default)]
+struct Mailbox {
+    events: VecDeque<Value>,
+}
+
+impl Mailbox {
+    fn file(&mut self, message: Value) {
+        if message.get("method").is_some() {
+            if self.events.len() >= MAX_QUEUED_EVENTS {
+                self.events.pop_front();
+            }
+            self.events.push_back(message);
+        }
+    }
+
+    fn take(&mut self, method: &str) -> Option<Value> {
+        let index = self
+            .events
+            .iter()
+            .position(|event| is_event(event, method))?;
+        self.events.remove(index)
+    }
+
+    fn discard(&mut self, method: &str) {
+        self.events.retain(|event| !is_event(event, method));
+    }
+}
+
+fn is_event(event: &Value, method: &str) -> bool {
+    event.get("method").and_then(Value::as_str) == Some(method)
+}
+
 pub struct Connection {
     socket: WebSocket<MaybeTlsStream<TcpStream>>,
-    events: VecDeque<Value>,
+    events: Mailbox,
     next_id: u64,
 }
 
@@ -27,7 +59,7 @@ impl Connection {
         let (socket, _) = tungstenite::connect(websocket_url).map_err(protocol)?;
         let connection = Self {
             socket,
-            events: VecDeque::new(),
+            events: Mailbox::default(),
             next_id: 0,
         };
         connection.set_read_timeout(READ_SLICE)?;
@@ -82,21 +114,16 @@ impl Connection {
     }
 
     fn file_event(&mut self, message: Value) {
-        if message.get("method").is_some() {
-            if self.events.len() >= MAX_QUEUED_EVENTS {
-                self.events.pop_front();
-            }
-            self.events.push_back(message);
-        }
+        self.events.file(message);
+    }
+
+    pub fn discard_events(&mut self, method: &str) {
+        self.events.discard(method);
     }
 
     pub fn wait_for_event(&mut self, method: &str, timeout: Duration) -> Result<Value, Failure> {
-        if let Some(index) = self
-            .events
-            .iter()
-            .position(|event| event.get("method").and_then(Value::as_str) == Some(method))
-        {
-            return Ok(self.events.remove(index).unwrap_or(Value::Null));
+        if let Some(event) = self.events.take(method) {
+            return Ok(event);
         }
         let deadline = Instant::now() + timeout;
         loop {
@@ -471,6 +498,7 @@ impl Page {
             json!({ "enabled": true }),
         )?;
 
+        connection.discard_events("Page.fileChooserOpened");
         let clicked = self.click(connection, button);
         let opened = clicked
             .and_then(|()| connection.wait_for_event("Page.fileChooserOpened", CALL_TIMEOUT));
@@ -637,6 +665,31 @@ mod tests {
             let parsed: String = serde_json::from_str(&literal).expect("valid JSON string");
             assert_eq!(parsed, title);
         }
+    }
+
+    #[test]
+    fn a_stale_chooser_event_is_dropped_so_the_next_wait_sees_only_a_fresh_one() {
+        let mut mailbox = Mailbox::default();
+        mailbox
+            .file(json!({ "method": "Page.fileChooserOpened", "params": { "backendNodeId": 1 } }));
+        mailbox.file(json!({ "method": "Page.loadEventFired" }));
+        mailbox.file(json!({ "id": 7, "result": {} }));
+
+        mailbox.discard("Page.fileChooserOpened");
+        assert_eq!(mailbox.take("Page.fileChooserOpened"), None);
+        assert!(
+            mailbox.take("Page.loadEventFired").is_some(),
+            "other events are left for whoever waits on them"
+        );
+        assert!(
+            mailbox.events.is_empty(),
+            "a reply is never queued as an event"
+        );
+
+        mailbox
+            .file(json!({ "method": "Page.fileChooserOpened", "params": { "backendNodeId": 2 } }));
+        let fresh = mailbox.take("Page.fileChooserOpened").expect("fresh");
+        assert_eq!(fresh["params"]["backendNodeId"], 2);
     }
 
     #[test]

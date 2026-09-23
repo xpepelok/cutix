@@ -13,13 +13,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
-  # Every cargo invocation below passes --locked so a build resolves exactly the versions
-  # in Cargo.lock. Without it a transitive release can change what CI tested without any
-  # change to this repository.
 
 jobs:
-  # Cheap gates that need no platform-specific dependencies. Run first so an unformatted
-  # or lint-failing branch fails in under a minute rather than after the full matrix.
   lint:
     name: format, lints and docs
     runs-on: ubuntu-latest
@@ -60,8 +55,6 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
-  # The declared minimum toolchain has to keep building, or `rust-version` is a claim
-  # nothing checks.
   msrv:
     name: minimum supported toolchain
     runs-on: ubuntu-latest
@@ -160,12 +153,8 @@ jobs:
         run: cargo build -p cutix --release --locked
 
       - name: Unit and integration tests
-        # Single-threaded: several suites open the same GPU adapter and the same audio
-        # device, which they cannot share.
         run: cargo test --workspace --locked -- --test-threads=1
 
-  # The optional backends are the ones most likely to break silently, because the code
-  # paths that use them are skipped rather than failed when they are absent.
   features:
     name: feature matrix
     runs-on: ubuntu-latest
@@ -194,8 +183,6 @@ jobs:
             pkg-config
 
       - name: Export and playback without FFmpeg
-        # The degrade tests assert that the shipped OpenH264 and sidecar-WAV paths are
-        # taken when FFmpeg is not loadable, which is the configuration most users are in.
         run: |
           cargo test -p cutix-export --locked -- --test-threads=1
           cargo test -p video --locked -- --test-threads=1

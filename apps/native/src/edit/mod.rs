@@ -1,13 +1,3 @@
-//! The editor: turning user intent into changes to a project document.
-//!
-//! Every mutation goes through [`Editor`], which snapshots the document for the undo stack
-//! before it touches anything. The submodules are the areas that mutation falls into —
-//! commands, history, fields, effects, text, tracks, captions — and each is re-exported
-//! here, so a consumer writes `edit::something` without caring which one it came from.
-//!
-//! Nothing in here imports GPUI. The editor is domain logic; the panels that drive it are
-//! the layer above.
-
 use cutix_project::model::{
     AnimationChannel, BaseElementFields, Crop, Effect, ElementAnimations, ElementTransition,
     JsonMap, Mask, MotionSettings, ParamValues, RetimeConfig, ScalarAnimationKey, TextBackground,

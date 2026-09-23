@@ -3,11 +3,6 @@ pub mod color;
 mod error;
 mod mattes;
 mod media;
-/// Schema migration between project document versions.
-///
-/// Public because loading a document written by an older version is a promise the
-/// crate makes, and the per-version transformers are how it is kept. Anything that
-/// changes here changes what old projects turn into.
 pub mod migrate;
 pub mod model;
 pub mod probe;

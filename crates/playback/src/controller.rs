@@ -1,29 +1,3 @@
-//! Owns the playback worker thread and the clock that drives it.
-//!
-//! # Lifecycle
-//!
-//! A [`PlaybackController`] owns exactly one worker thread. The worker holds the frame
-//! composer, the decoders and their caches; the controller holds the clock and the frame
-//! queue the worker publishes into. Commands travel to the worker over a channel
-//! and are coalesced: when several arrive at once only the last compose or stream request
-//! is acted on, because the earlier ones describe a timeline position that has already
-//! been superseded.
-//!
-//! # Cancellation
-//!
-//! Composing a frame is not interruptible, so anything that invalidates in-flight work —
-//! [`PlaybackController::set_project`], [`PlaybackController::seek`],
-//! [`PlaybackController::discard_queued`] — ends the current
-//! [`PlaybackGeneration`] instead. The queue is emptied immediately and frames that the
-//! worker was already composing are refused when they arrive. A caller streaming frames
-//! must watch [`PlaybackController::generation`] and restart its stream when it advances,
-//! or it will keep receiving nothing.
-//!
-//! # Shutdown
-//!
-//! Dropping the controller sends `Stop` and joins the worker, so the worker never outlives
-//! the controller and no frame is published after the drop returns.
-
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
@@ -42,16 +16,12 @@ use crate::render::{ComposeRequest, FrameComposer, PendingFrame};
 
 pub use crate::queue::QUEUE_DEPTH;
 
-/// How many frames the composer may work on at once.
 const PIPELINE_DEPTH: usize = 2;
 
-/// How long the worker sleeps when it has nothing to do.
 const IDLE_NAP: Duration = Duration::from_millis(1);
 
-/// Consecutive submit failures after which the worker stops hammering the decoder.
 const GIVE_UP_AFTER: usize = 30;
 
-/// How long the worker sleeps once a stream has clearly stalled.
 const STALL_NAP: Duration = Duration::from_millis(20);
 
 fn nap_after_failure(refused: usize) -> Duration {
@@ -62,10 +32,6 @@ fn nap_after_failure(refused: usize) -> Duration {
     }
 }
 
-/// Work sent to the playback worker.
-///
-/// Every variant that produces a frame carries the generation it was requested under, so
-/// the worker can stamp its results and the presenter can refuse stale ones.
 enum Command {
     Compose {
         generation: PlaybackGeneration,
@@ -80,19 +46,15 @@ enum Command {
         height: u32,
         frame: FrameDuration,
     },
-    /// Replaces the project. Carries no generation: the controller ends the old one
-    /// before sending this, so anything still in flight is already refused.
     SetProject(Arc<Project>),
     ReleaseMedia(String),
     ClearCaches,
     Stop,
 }
 
-/// Drives frame composition on a worker thread and hands finished frames to the presenter.
 pub struct PlaybackController {
     commands: Sender<Command>,
     queue: FrameQueue,
-    /// The frame currently on screen. Kept so `latest_frame` can answer between arrivals.
     presented: Mutex<Option<FrameSlot>>,
     errors: Arc<Mutex<Option<String>>>,
     ready: Arc<AtomicBool>,
@@ -102,10 +64,6 @@ pub struct PlaybackController {
 }
 
 impl PlaybackController {
-    /// Starts a worker for `project`, rendering `scene_id` (or the default scene).
-    ///
-    /// Blocks until the worker has built its composer, so a GPU that cannot be acquired is
-    /// reported here rather than as a silent absence of frames.
     pub fn new(
         project: Arc<Project>,
         scene_id: Option<String>,
@@ -168,21 +126,14 @@ impl PlaybackController {
         })
     }
 
-    /// The scene being composed, or `None` for the project's default scene.
     pub fn scene_id(&self) -> Option<&str> {
         self.scene_id.as_deref()
     }
 
-    /// Whether the worker has finished building its composer and can accept work.
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
-    /// The era frames are currently accepted for.
-    ///
-    /// A caller that keeps a stream running must compare this against the generation its
-    /// stream was started in; when it differs, everything it requested has been dropped
-    /// and the stream has to be restarted from the current clock position.
     pub fn generation(&self) -> PlaybackGeneration {
         self.queue.generation()
     }
@@ -199,31 +150,15 @@ impl PlaybackController {
         self.clock().is_playing()
     }
 
-    /// Moves the playhead and abandons every frame requested for the old position.
-    ///
-    /// Advances the generation, so a stream running across the seek must be restarted.
     pub fn seek(&self, time: MediaTime) {
         self.clock().seek(time);
         self.invalidate();
     }
 
-    /// Moves the playhead without ending the current era.
-    ///
-    /// Every composed frame carries the timeline time it was composed for, and
-    /// [`PlaybackController::latest_frame`] presents each one once the clock reaches it. So
-    /// correcting the clock changes *when* the frames already in the pipeline are shown, not
-    /// whether they are still right — unlike [`PlaybackController::seek`], which moves the
-    /// playhead somewhere those frames do not belong and must therefore discard them.
-    ///
-    /// Audio/video sync corrects the clock against the audio device continuously. Doing that
-    /// through `seek` empties the queue on every correction, which leaves nothing to present
-    /// between one correction and the next and holds the picture still while the sound plays
-    /// on.
     pub fn retime(&self, time: MediaTime) {
         self.clock().seek(time);
     }
 
-    /// Sets the playback rate. A rate that is not finite and positive resets to normal speed.
     pub fn set_rate(&self, rate: f64) {
         self.clock().set_rate(rate);
     }
@@ -232,34 +167,25 @@ impl PlaybackController {
         self.clock().rate()
     }
 
-    /// The timeline position of the playhead right now.
     pub fn current_time(&self) -> MediaTime {
         self.clock().now()
     }
 
-    /// Swaps in a new project and abandons every frame composed for the old one.
-    ///
-    /// Advances the generation before the command is sent, so frames the worker is already
-    /// composing against the old project are refused when they arrive rather than being
-    /// presented over the new one.
     pub fn set_project(&self, project: Arc<Project>) {
         self.invalidate();
         let _ = self.commands.send(Command::SetProject(project));
     }
 
-    /// Drops the decoder and raster caches held for one media item.
     pub fn release_media(&self, media_id: &str) {
         let _ = self
             .commands
             .send(Command::ReleaseMedia(media_id.to_owned()));
     }
 
-    /// Drops every cache the composer holds. The next frame will be slow.
     pub fn clear_caches(&self) {
         let _ = self.commands.send(Command::ClearCaches);
     }
 
-    /// Asks for a single frame at `time`, replacing any stream in progress.
     pub fn request_frame(&self, time: MediaTime, width: u32, height: u32) {
         let _ = self.commands.send(Command::Compose {
             generation: self.queue.generation(),
@@ -269,11 +195,6 @@ impl PlaybackController {
         });
     }
 
-    /// Starts composing consecutive frames from `start`, one every `frame`.
-    ///
-    /// Frame positions are computed from the frame index against the exact rational frame
-    /// duration, so a rate whose frame is not a whole number of ticks still plays at the
-    /// right speed and a long stream does not drift away from the clock.
     pub fn stream_from(&self, start: MediaTime, width: u32, height: u32, frame: FrameDuration) {
         let _ = self.commands.send(Command::Stream {
             generation: self.queue.generation(),
@@ -284,23 +205,14 @@ impl PlaybackController {
         });
     }
 
-    /// How many composed frames are waiting to be presented.
     pub fn queued_frames(&self) -> usize {
         self.queue.len()
     }
 
-    /// Throws away every queued and in-flight frame, including the one on screen.
-    ///
-    /// Advances the generation, so a stream running across this call must be restarted.
     pub fn discard_queued(&self) {
         self.invalidate();
     }
 
-    /// The frame that should be on screen, or `None` if nothing valid has arrived yet.
-    ///
-    /// Frames left over from an earlier generation are dropped rather than returned, so a
-    /// project swap or a seek blanks the preview until a frame for the new era arrives
-    /// instead of briefly showing the old timeline.
     pub fn latest_frame(&self) -> Option<FrameSlot> {
         let due = self.current_time();
         let playing = self.is_playing();
@@ -315,16 +227,16 @@ impl PlaybackController {
         {
             *presented = None;
         }
+        let force_first = presented.is_none();
         if let Some(fresh) = self
             .queue
-            .take_due(generation, |slot| !playing || slot.time <= due)
+            .take_due(generation, force_first, |slot| !playing || slot.time <= due)
         {
             *presented = Some(fresh);
         }
         presented.clone()
     }
 
-    /// Takes the last error the worker reported, if any.
     pub fn take_error(&self) -> Option<String> {
         self.errors
             .lock()
@@ -332,8 +244,6 @@ impl PlaybackController {
             .take()
     }
 
-    /// Ends the current era: empties the queue, blanks the presented frame and returns the
-    /// generation subsequent requests must carry.
     fn invalidate(&self) -> PlaybackGeneration {
         let generation = self.queue.invalidate();
         *self
@@ -359,7 +269,6 @@ impl Drop for PlaybackController {
     }
 }
 
-/// A run of consecutive frames the worker is walking through.
 struct Stream {
     generation: PlaybackGeneration,
     start: MediaTime,
@@ -370,10 +279,6 @@ struct Stream {
 }
 
 impl Stream {
-    /// The timeline position of frame `index` in this stream.
-    ///
-    /// Computed from the index rather than by repeated addition, so the error against the
-    /// true frame boundary stays below half a tick however long the stream runs.
     fn time_of(&self, index: i64) -> Option<MediaTime> {
         let offset = self.frame.ticks_at_frame(index)?;
         Some(MediaTime::from_ticks(
@@ -439,8 +344,6 @@ fn run_worker(
                 }
                 Command::ReleaseMedia(id) => released.push(id),
                 Command::ClearCaches => *clear_caches = true,
-                // Only the newest compose or stream request matters; the earlier ones
-                // describe a playhead position that has already been superseded.
                 compose => *pending = Some(compose),
             }
             true
@@ -486,9 +389,6 @@ fn run_worker(
         }
 
         if project_replaced {
-            // Frames already composed or in flight belong to the previous project. The
-            // controller has ended their generation, so they would be refused anyway;
-            // dropping them here stops the worker spending time finishing them.
             stream = None;
             in_flight.clear();
             queue.clear();
@@ -556,8 +456,6 @@ fn run_worker(
         let mut failed = None;
         while in_flight.len() < PIPELINE_DEPTH && queue.len() + in_flight.len() < QUEUE_DEPTH {
             let Some(time) = active.time_of(active.index) else {
-                // The stream has walked past the end of the tick range. Stop rather than
-                // wrapping around to a nonsensical timeline position.
                 stream = None;
                 break;
             };
@@ -630,8 +528,6 @@ mod tests {
 
     #[test]
     fn a_stream_at_a_rate_with_a_fractional_frame_still_runs_at_the_right_speed() {
-        // 23 fps is not a broadcast rate and 120000/23 is not a whole number of ticks.
-        // The stream must still cover one second of timeline in 23 frames.
         let rate = FrameRate::nearest(23.0).expect("a real rate");
         assert_eq!(rate.ticks_per_frame(), None);
         let stream = stream_at(rate);

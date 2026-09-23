@@ -125,6 +125,76 @@ fn a_project_package_round_trips_through_a_second_store() {
     );
 }
 
+fn with_cutout(mut element: TimelineElement, matte_bytes: &[u8]) -> TimelineElement {
+    let TimelineElement::Image(image) = &mut element else {
+        panic!("image element");
+    };
+    image.cutout = Some(json!({ "png": cutix_project::encode_base64(matte_bytes) }));
+    element
+}
+
+#[test]
+fn a_package_leaves_out_mattes_the_saved_project_no_longer_refers_to() {
+    let source_root = tempfile::tempdir().expect("tempdir");
+    let archive_root = tempfile::tempdir().expect("tempdir");
+    let store = ProjectStore::new(source_root.path());
+    let mut project = store.create("Mattes").expect("create");
+    {
+        let elements = project.scenes[0].tracks.main.elements_mut();
+        elements.push(with_cutout(
+            element("first", "photo", 0.0, 2.0),
+            b"kept matte",
+        ));
+        elements.push(with_cutout(
+            element("second", "photo", 2.0, 3.5),
+            b"orphaned matte",
+        ));
+    }
+    store.save(&project).expect("save");
+    let matte_directory = store.matte_directory(&project.metadata.id);
+    let on_disk = || {
+        std::fs::read_dir(&matte_directory)
+            .expect("matte dir")
+            .count()
+    };
+    assert_eq!(on_disk(), 2, "both mattes were externalized");
+
+    let TimelineElement::Image(image) = &mut project.scenes[0].tracks.main.elements_mut()[1] else {
+        panic!("image element");
+    };
+    image.cutout = None;
+
+    let archive = archive_root
+        .path()
+        .join(format!("mattes.{PACKAGE_EXTENSION}"));
+    export_package(&store, &project, &archive, &mut |_| {}).expect("export package");
+
+    let kept: Vec<String> = store
+        .saved_matte_files(&project)
+        .expect("referenced mattes")
+        .iter()
+        .filter_map(|path| path.rsplit('/').next().map(str::to_owned))
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+
+    let zip = zip::ZipArchive::new(std::fs::File::open(&archive).expect("open archive"))
+        .expect("read archive");
+    let packaged: Vec<&str> = zip
+        .file_names()
+        .filter(|name| name.starts_with("mattes/"))
+        .collect();
+    assert_eq!(
+        packaged,
+        vec![format!("mattes/{}", kept[0]).as_str()],
+        "only the referenced matte travels"
+    );
+    assert_eq!(
+        on_disk(),
+        2,
+        "packaging must not sweep the live directory; undo may still need the orphan"
+    );
+}
+
 #[test]
 fn importing_into_the_store_that_wrote_it_never_overwrites_the_original() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -154,7 +224,6 @@ fn a_file_that_is_not_a_package_is_refused_without_leaving_a_project_behind() {
     assert_eq!(store.list_project_ids().expect("list"), before);
 }
 
-/// Adds a media asset that lives outside the project directory, as a linked file.
 fn linked_asset(store: &ProjectStore, project_id: &str, source: &Path) -> String {
     let media = MediaStore::for_project(store, project_id);
     let asset: cutix_project::MediaAssetData = serde_json::from_value(json!({
@@ -181,7 +250,6 @@ fn an_imported_package_uses_its_own_copy_of_linked_media_not_the_path_it_came_fr
     let source = ProjectStore::new(source_root.path());
     let target = ProjectStore::new(target_root.path());
 
-    // A file the project links to from outside its own directory.
     let outside = outside_root.path().join("linked.png");
     std::fs::write(&outside, b"the bytes the project was made with").expect("linked file");
 
@@ -193,9 +261,6 @@ fn an_imported_package_uses_its_own_copy_of_linked_media_not_the_path_it_came_fr
         .join(format!("linked.{PACKAGE_EXTENSION}"));
     export_package(&source, &project, &archive, &mut |_| {}).expect("export package");
 
-    // The original is replaced by something else at the same absolute path. This is the
-    // case that quietly ruins a project: the recorded path still resolves, to the wrong
-    // file. Deleting it would only have shown up as missing media.
     std::fs::write(&outside, b"a completely different file now").expect("overwrite");
 
     let imported = import_package(&target, &archive).expect("import package");
@@ -258,8 +323,6 @@ fn a_package_whose_project_is_corrupt_leaves_nothing_in_the_library() {
         .join(format!("corrupt.{PACKAGE_EXTENSION}"));
     export_package(&source, &project, &archive, &mut |_| {}).expect("export package");
 
-    // Rewrite the archive with the project document truncated. Everything else in it is
-    // still valid, so extraction gets a long way in before the problem is discovered.
     let corrupt = archive_root
         .path()
         .join(format!("truncated.{PACKAGE_EXTENSION}"));
@@ -287,7 +350,6 @@ fn a_package_whose_project_is_corrupt_leaves_nothing_in_the_library() {
     );
 }
 
-/// Copies an archive, replacing project.json with bytes that are not a project.
 fn rewrite_with_broken_project(from: &Path, to: &Path) {
     let mut reader =
         zip::ZipArchive::new(std::fs::File::open(from).expect("open archive")).expect("read zip");

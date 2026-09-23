@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use youtube::accounts::Accounts;
+use youtube::clock::Zone;
 use youtube::failure::{Failure, FailureNote};
 use youtube::history::{History, HistoryEntry, HistoryFilter};
 use youtube::publish::{self, Comments, Issue, License, Privacy, PublishSettings, Remix};
@@ -69,6 +70,18 @@ pub fn sign_in(
     })?;
     let from = youtube::chrome::profile_directory(directory, &scratch);
     Ok((account, from, avatar))
+}
+
+pub fn reauth(
+    directory: &std::path::Path,
+    account_id: &str,
+    now: i64,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(youtube::Account, Option<Vec<u8>>), Failure> {
+    let cancel = Arc::clone(cancel);
+    youtube::session::reauth(directory, account_id, now, &mut move || {
+        !cancel.load(std::sync::atomic::Ordering::Relaxed)
+    })
 }
 
 pub fn adopt_profile(
@@ -135,20 +148,7 @@ pub fn run_upload(
 }
 
 pub fn unix_from_civil(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> i64 {
-    let year = year as i64;
-    let month = month as i64;
-    let day = day as i64;
-    let (year, month) = if month <= 2 {
-        (year - 1, month + 9)
-    } else {
-        (year, month - 3)
-    };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let day_of_year = (153 * month + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    let days = era * 146_097 + day_of_era - 719_468;
-    days * 86_400 + hour.min(23) as i64 * 3_600 + minute.min(59) as i64 * 60
+    youtube::unix_from_civil(year, month, day, hour, minute)
 }
 
 pub fn step_progress(elapsed: f32) -> f32 {
@@ -207,6 +207,7 @@ pub fn stage_label(stage: Stage, fraction: f32) -> String {
 
 pub struct Running {
     pub task_id: String,
+    pub account_id: String,
     pub job: Arc<Mutex<UploadJob>>,
     pub cancel: Arc<AtomicBool>,
 }
@@ -463,6 +464,11 @@ impl Default for SignInForm {
     }
 }
 
+pub struct Reauthing {
+    pub account_id: String,
+    pub cancel: Arc<AtomicBool>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scheduled {
     pub year: i32,
@@ -473,24 +479,45 @@ pub struct Scheduled {
 }
 
 impl Scheduled {
-    pub fn soon(now: i64) -> Self {
-        let (year, month, day) = youtube::civil_from_unix(now + 3_600);
-        let hour = ((now + 3_600).rem_euclid(86_400) / 3_600) as u32;
+    pub fn soon(now: i64, zone: Zone) -> Self {
+        Self {
+            minute: 0,
+            ..Self::at(now + 3_600, zone)
+        }
+    }
+
+    pub fn at(unix: i64, zone: Zone) -> Self {
+        let wall = zone.wall_clock(unix);
+        let (year, month, day) = youtube::civil_from_unix(wall);
+        let seconds = wall.rem_euclid(86_400);
         Self {
             year: year as i32,
             month,
             day,
-            hour,
-            minute: 0,
+            hour: (seconds / 3_600) as u32,
+            minute: (seconds % 3_600 / 60) as u32,
         }
     }
 
-    pub fn seconds(&self) -> i64 {
-        unix_from_civil(self.year, self.month, self.day, self.hour, self.minute)
+    pub fn seconds(&self, zone: Zone) -> i64 {
+        zone.instant(unix_from_civil(
+            self.year,
+            self.month,
+            crate::calendar::clamp_day(self.year, self.month, self.day),
+            self.hour,
+            self.minute,
+        ))
     }
 
-    pub fn stamp(&self) -> String {
-        crate::calendar::to_stamp(self.year, self.month, self.day, self.hour, self.minute)
+    pub fn stamp(&self, zone: Zone) -> String {
+        crate::calendar::to_stamp(
+            self.year,
+            self.month,
+            self.day,
+            self.hour,
+            self.minute,
+            zone,
+        )
     }
 
     pub fn label(&self) -> String {
@@ -589,7 +616,7 @@ impl PublishForm {
         let schedule = self
             .schedule
             .as_ref()
-            .map(Scheduled::stamp)
+            .map(|when| when.stamp(Zone::Local))
             .unwrap_or_default();
         PublishSettings {
             title: self.title.buffer.text.clone(),
@@ -633,6 +660,33 @@ pub enum Edge {
     To,
 }
 
+pub fn history_window(
+    from: Option<Scheduled>,
+    to: Option<Scheduled>,
+    zone: Zone,
+) -> (Option<i64>, Option<i64>) {
+    (
+        from.map(|when| when.seconds(zone)),
+        to.map(|when| when.seconds(zone) + 59),
+    )
+}
+
+pub fn day_edge(edge: Edge, now: i64, zone: Zone) -> Scheduled {
+    let today = Scheduled::at(now, zone);
+    match edge {
+        Edge::From => Scheduled {
+            hour: 0,
+            minute: 0,
+            ..today
+        },
+        Edge::To => Scheduled {
+            hour: 23,
+            minute: 59,
+            ..today
+        },
+    }
+}
+
 pub struct Filters {
     pub search: TextField,
     pub from: Option<Scheduled>,
@@ -673,23 +727,16 @@ impl Filters {
         }
         self.open = Some(edge);
         if self.edge(edge).is_none() {
-            let mut when = Scheduled::soon(now);
-            when.minute = 0;
-            if edge == Edge::From {
-                when.hour = 0;
-            } else {
-                when.hour = 23;
-                when.minute = 59;
-            }
-            *self.edge_mut(edge) = Some(when);
+            *self.edge_mut(edge) = Some(day_edge(edge, now, Zone::Local));
         }
     }
 
     pub fn as_filter(&self) -> HistoryFilter {
+        let (from, to) = history_window(self.from, self.to, Zone::Local);
         HistoryFilter {
             search: self.search.buffer.text.clone(),
-            from: self.from.map(|when| when.seconds()),
-            to: self.to.map(|when| when.seconds()),
+            from,
+            to,
             accounts: self.accounts.clone(),
         }
     }
@@ -753,12 +800,28 @@ pub struct Youtube {
     pub hovered_action: Option<String>,
     pub notice: Option<String>,
     pub signing_in: bool,
-    pub refreshing: bool,
+    pub refreshing: Option<String>,
+    pub refresh_tried: Vec<String>,
+    pub reauthing: Option<Reauthing>,
 }
 
 impl Default for Youtube {
     fn default() -> Self {
-        let directory = youtube::data_directory();
+        let settings = crate::state::load_settings();
+        let volume = settings.preview_volume.unwrap_or(1.0);
+        Self::at(
+            youtube::data_directory(),
+            crate::preview_audio::Sound {
+                volume,
+                muted: settings.preview_muted.unwrap_or(true),
+                restore: volume,
+            },
+        )
+    }
+}
+
+impl Youtube {
+    pub fn at(directory: PathBuf, sound: crate::preview_audio::Sound) -> Self {
         let accounts = Accounts::load(&directory);
 
         let mut avatars = Avatars::default();
@@ -778,15 +841,7 @@ impl Default for Youtube {
             pending_publish: None,
             choosing_account: false,
             preview_bar: (0.0, 0.0),
-            sound: {
-                let settings = crate::state::load_settings();
-                let volume = settings.preview_volume.unwrap_or(1.0);
-                crate::preview_audio::Sound {
-                    volume,
-                    muted: settings.preview_muted.unwrap_or(true),
-                    restore: volume,
-                }
-            },
+            sound,
             volume_open: false,
             volume_bar: (0.0, 0.0),
             should_close: false,
@@ -799,7 +854,9 @@ impl Default for Youtube {
             hovered_action: None,
             notice: None,
             signing_in: false,
-            refreshing: false,
+            refreshing: None,
+            refresh_tried: Vec::new(),
+            reauthing: None,
         }
     }
 }
@@ -825,6 +882,149 @@ impl Youtube {
 
     pub fn is_configured(&self) -> bool {
         has_browser()
+    }
+
+    pub fn is_reauthing(&self, account_id: &str) -> bool {
+        self.reauthing
+            .as_ref()
+            .is_some_and(|reauthing| reauthing.account_id == account_id)
+    }
+
+    pub fn is_refreshing(&self, account_id: &str) -> bool {
+        self.refreshing.as_deref() == Some(account_id)
+    }
+
+    pub fn is_uploading_on(&self, account_id: &str) -> bool {
+        self.running
+            .iter()
+            .any(|running| running.account_id == account_id)
+    }
+
+    pub fn profile_in_use(&self, account_id: &str) -> bool {
+        self.is_reauthing(account_id)
+            || self.is_refreshing(account_id)
+            || self.is_uploading_on(account_id)
+    }
+
+    pub fn begin_reauth(&mut self, account_id: &str) -> Result<Arc<AtomicBool>, String> {
+        if self.reauthing.is_some() || self.profile_in_use(account_id) {
+            return Err(cutix_i18n::t("youtube.accounts.busy"));
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.reauthing = Some(Reauthing {
+            account_id: account_id.to_string(),
+            cancel: Arc::clone(&cancel),
+        });
+        self.notice = None;
+        Ok(cancel)
+    }
+
+    pub fn end_reauth(&mut self, account_id: &str) {
+        if self.is_reauthing(account_id) {
+            self.reauthing = None;
+            if self.notice.as_deref() == Some(cutix_i18n::t("youtube.accounts.busy").as_str()) {
+                self.notice = None;
+            }
+        }
+    }
+
+    pub fn cancel_reauth(&self, account_id: &str) {
+        if let Some(reauthing) = self
+            .reauthing
+            .as_ref()
+            .filter(|reauthing| reauthing.account_id == account_id)
+        {
+            reauthing
+                .cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    pub fn reauthorised(
+        &mut self,
+        fresh: youtube::Account,
+        avatar: Option<Vec<u8>>,
+        now: i64,
+    ) -> bool {
+        let id = fresh.id.clone();
+        if !self.accounts.reauthorised(fresh, now) {
+            return false;
+        }
+        if let Some(bytes) = avatar {
+            self.store_avatar(&id, &bytes);
+        }
+        self.refresh_tried.retain(|tried| *tried != id);
+
+        let stalled: Vec<String> = self
+            .queue
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.account_id == id && task.failure_note().is_some_and(|note| note.auth)
+            })
+            .map(|task| task.id.clone())
+            .collect();
+        for task_id in &stalled {
+            self.queue.retry(task_id);
+        }
+
+        self.persist();
+        self.notice = Some(cutix_i18n::t("youtube.accounts.added"));
+        true
+    }
+
+    pub fn next_startable(&self) -> Option<Task> {
+        self.queue
+            .visible()
+            .into_iter()
+            .find(|task| {
+                task.state == TaskState::Waiting
+                    && !self
+                        .running
+                        .iter()
+                        .any(|running| running.task_id == task.id)
+                    && !self.profile_in_use(&task.account_id)
+            })
+            .cloned()
+    }
+
+    pub fn fail_stale_sessions(&mut self) -> bool {
+        let stale: Vec<String> = self
+            .queue
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.state == TaskState::Waiting
+                    && !self.is_reauthing(&task.account_id)
+                    && self
+                        .accounts
+                        .get(&task.account_id)
+                        .is_some_and(|account| account.needs_reauth)
+            })
+            .map(|task| task.id.clone())
+            .collect();
+        for task_id in &stale {
+            self.queue.fail(task_id, &Failure::SignedOut);
+        }
+        !stale.is_empty()
+    }
+
+    pub fn account_to_refresh(&self) -> Option<String> {
+        if self.refreshing.is_some() {
+            return None;
+        }
+        let wanted = |account: &&youtube::Account| {
+            let named = !account.title.trim().is_empty() && account.title != account.id;
+            (!named || self.avatars.get(&account.id).is_none())
+                && !account.needs_reauth
+                && !self.refresh_tried.contains(&account.id)
+                && !self.profile_in_use(&account.id)
+        };
+        self.accounts
+            .active()
+            .filter(wanted)
+            .or_else(|| self.accounts.accounts.iter().find(wanted))
+            .map(|account| account.id.clone())
     }
 
     pub fn forget(&mut self, account_id: &str) -> bool {
@@ -963,6 +1163,10 @@ impl Youtube {
     }
 
     pub fn remove_account(&mut self, account_id: &str) {
+        if self.profile_in_use(account_id) {
+            self.notice = Some(cutix_i18n::t("youtube.accounts.busy"));
+            return;
+        }
         self.forget(account_id);
         self.persist();
         self.notice = Some(cutix_i18n::t("youtube.accounts.removed"));
@@ -1086,6 +1290,382 @@ mod tests {
     }
 
     #[test]
+    fn a_time_picked_on_the_local_clock_is_stored_as_the_instant_it_names() {
+        let moscow = Zone::Fixed(3 * 3_600);
+        let when = Scheduled {
+            year: 2026,
+            month: 9,
+            day: 23,
+            hour: 15,
+            minute: 30,
+        };
+        assert_eq!(when.stamp(moscow), "2026-09-23T12:30:00Z");
+        assert_eq!(
+            Scheduled::at(when.seconds(moscow), moscow),
+            when,
+            "reading the instant back on the same clock gives what was picked"
+        );
+    }
+
+    #[test]
+    fn a_local_time_that_has_passed_is_refused_even_while_its_digits_are_still_ahead_in_utc() {
+        let moscow = Zone::Fixed(3 * 3_600);
+        let now = youtube::iso_timestamp(unix_from_civil(2026, 9, 23, 12, 0));
+        let at = |hour| PublishSettings {
+            title: "Clip".to_string(),
+            publish_at: Some(
+                Scheduled {
+                    year: 2026,
+                    month: 9,
+                    day: 23,
+                    hour,
+                    minute: 0,
+                }
+                .stamp(moscow),
+            ),
+            ..Default::default()
+        };
+        assert!(
+            at(14).validate(&now).contains(&Issue::ScheduleInThePast),
+            "14:00 in Moscow was an hour ago at 12:00 UTC, though \"14:00Z\" is still to come"
+        );
+        assert!(at(16).validate(&now).is_empty());
+    }
+
+    #[test]
+    fn the_proposed_schedule_is_the_next_hour_on_the_local_clock() {
+        let moscow = Zone::Fixed(3 * 3_600);
+        let soon = Scheduled::soon(unix_from_civil(2026, 9, 23, 12, 37), moscow);
+        assert_eq!((soon.day, soon.hour, soon.minute), (23, 16, 0));
+
+        let after_local_midnight = Scheduled::soon(unix_from_civil(2026, 9, 23, 22, 10), moscow);
+        assert_eq!(
+            (after_local_midnight.day, after_local_midnight.hour),
+            (24, 2),
+            "the date rolls over on the local clock, not the UTC one"
+        );
+    }
+
+    #[test]
+    fn an_empty_filter_edge_opens_on_today_even_in_the_last_hour_of_the_day() {
+        let moscow = Zone::Fixed(3 * 3_600);
+        let late = unix_from_civil(2026, 9, 23, 20, 30);
+        assert_eq!(Scheduled::soon(late, moscow).day, 24);
+
+        let from = day_edge(Edge::From, late, moscow);
+        assert_eq!((from.day, from.hour, from.minute), (23, 0, 0));
+        let to = day_edge(Edge::To, late, moscow);
+        assert_eq!((to.day, to.hour, to.minute), (23, 23, 59));
+        assert!(
+            history_window(Some(from), Some(to), moscow).0.unwrap() <= late
+                && late <= history_window(Some(from), Some(to), moscow).1.unwrap(),
+            "an upload made just now falls inside the opened range"
+        );
+    }
+
+    #[test]
+    fn a_history_filter_spans_whole_local_days_down_to_the_last_second() {
+        let berlin = Zone::Fixed(2 * 3_600);
+        let day = |hour, minute| Scheduled {
+            year: 2026,
+            month: 9,
+            day: 23,
+            hour,
+            minute,
+        };
+        let (from, to) = history_window(Some(day(0, 0)), Some(day(23, 59)), berlin);
+        assert_eq!(from, Some(unix_from_civil(2026, 9, 22, 22, 0)));
+        assert_eq!(
+            to,
+            Some(unix_from_civil(2026, 9, 23, 21, 59) + 59),
+            "an upload at 23:59:30 Berlin time is still that day"
+        );
+        assert_eq!(history_window(None, None, berlin), (None, None));
+    }
+
+    fn scratch_state(name: &str) -> Youtube {
+        let directory = std::env::temp_dir().join(format!(
+            "cutix-yt-state-{}-{name}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        Youtube::at(directory, crate::preview_audio::Sound::default())
+    }
+
+    fn channel(id: &str) -> youtube::Account {
+        youtube::Account {
+            id: id.to_string(),
+            title: format!("Channel {id}"),
+            added_at: 100,
+            ..Default::default()
+        }
+    }
+
+    fn running_on(task_id: &str, account_id: &str) -> Running {
+        Running {
+            task_id: task_id.to_string(),
+            account_id: account_id.to_string(),
+            job: Arc::new(Mutex::new(UploadJob::default())),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn a_second_reauth_is_refused_and_only_the_matching_one_is_released_or_cancelled() {
+        let mut state = scratch_state("one-reauth");
+        state.accounts.upsert(channel("UCa"));
+        state.accounts.upsert(channel("UCb"));
+
+        let cancel = state.begin_reauth("UCa").expect("the first one starts");
+        let refusal = state
+            .begin_reauth("UCb")
+            .expect_err("a second would take over the first one's Cancel");
+        assert_eq!(
+            refusal,
+            cutix_i18n::t("youtube.accounts.busy"),
+            "a reason to wait, not the status line of a sign-in that is not this row's"
+        );
+        assert!(state.is_reauthing("UCa"));
+
+        state.notice = Some(refusal);
+        state.end_reauth("UCb");
+        state.cancel_reauth("UCb");
+        assert!(
+            state.is_reauthing("UCa"),
+            "another account's result releases nothing"
+        );
+        assert!(state.notice.is_some(), "and takes no notice down");
+        assert!(!cancel.load(std::sync::atomic::Ordering::Relaxed));
+
+        state.cancel_reauth("UCa");
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+        state.end_reauth("UCa");
+        assert!(state.reauthing.is_none());
+        assert_eq!(state.notice, None);
+
+        state.begin_reauth("UCa").expect("starts again");
+        state.notice = Some(cutix_i18n::t("youtube.queue.added"));
+        state.end_reauth("UCa");
+        assert!(state.notice.is_some(), "an unrelated notice stays");
+        assert!(state.begin_reauth("UCb").is_ok());
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn a_profile_an_upload_or_a_refresh_has_open_is_never_handed_to_a_sign_in() {
+        let mut state = scratch_state("busy-profile");
+        state.accounts.upsert(channel("UCa"));
+        state.accounts.upsert(channel("UCb"));
+
+        state.running.push(running_on("q1", "UCa"));
+        assert!(
+            state.begin_reauth("UCa").is_err(),
+            "its browser would stop the upload's"
+        );
+        state.refreshing = Some("UCb".to_string());
+        assert!(state.begin_reauth("UCb").is_err());
+        assert!(state.reauthing.is_none());
+        assert!(state.notice.is_none(), "the caller shows the reason");
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn removing_an_account_whose_browser_is_open_is_refused_and_its_profile_is_kept() {
+        let mut state = scratch_state("remove-busy");
+        state.accounts.upsert(channel("UCa"));
+        let profile = youtube::chrome::profile_directory(&state.directory, "UCa");
+        std::fs::create_dir_all(&profile).expect("profile");
+
+        state.begin_reauth("UCa").expect("reauth");
+        state.remove_account("UCa");
+        assert!(state.accounts.get("UCa").is_some());
+        assert!(
+            profile.exists(),
+            "a live profile is not deleted underneath its browser"
+        );
+        assert!(state.notice.is_some());
+
+        state.end_reauth("UCa");
+        state.remove_account("UCa");
+        assert!(state.accounts.get("UCa").is_none());
+        assert!(!profile.exists());
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn a_reauth_that_finishes_after_its_account_was_removed_does_not_bring_it_back() {
+        let mut state = scratch_state("reauth-removed");
+        state.accounts.upsert(channel("UCa"));
+        state.accounts.remove("UCa");
+
+        assert!(!state.reauthorised(channel("UCa"), None, 5_000));
+        assert!(state.accounts.get("UCa").is_none());
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn signing_back_in_keeps_the_known_name_and_restarts_only_this_accounts_stalled_uploads() {
+        let mut state = scratch_state("reauth-merge");
+        state.accounts.upsert(channel("UCa"));
+        state.accounts.upsert(channel("UCb"));
+        state.accounts.mark_needs_reauth("UCa");
+        let mine = state.queue.push(
+            "UCa",
+            PublishSettings::default(),
+            PathBuf::from("C:/a.mp4"),
+            1,
+            1,
+        );
+        let theirs = state.queue.push(
+            "UCb",
+            PublishSettings::default(),
+            PathBuf::from("C:/b.mp4"),
+            1,
+            2,
+        );
+        state.queue.fail(&mine, &Failure::SignedOut);
+        state.queue.fail(&theirs, &Failure::SignedOut);
+
+        let blank = youtube::Account {
+            id: "UCa".to_string(),
+            ..Default::default()
+        };
+        assert!(state.reauthorised(blank, None, 9_000));
+
+        let account = state.accounts.get("UCa").expect("account");
+        assert_eq!(
+            account.title, "Channel UCa",
+            "a page that timed out renames nothing"
+        );
+        assert!(!account.needs_reauth);
+        assert_eq!(account.refreshed_at, 9_000);
+        assert_eq!(
+            state.queue.get(&mine).map(|task| task.state.clone()),
+            Some(TaskState::Waiting)
+        );
+        assert!(
+            state
+                .queue
+                .get(&theirs)
+                .is_some_and(|task| task.failure_note().is_some()),
+            "another account's session is still dead"
+        );
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn uploads_for_a_signed_out_account_stop_without_a_browser_while_the_rest_go_on() {
+        let mut state = scratch_state("stale-session");
+        state.accounts.upsert(channel("UCa"));
+        state.accounts.upsert(channel("UCb"));
+        state.accounts.mark_needs_reauth("UCa");
+        let stale = state.queue.push(
+            "UCa",
+            PublishSettings::default(),
+            PathBuf::from("C:/a.mp4"),
+            1,
+            1,
+        );
+        let fine = state.queue.push(
+            "UCb",
+            PublishSettings::default(),
+            PathBuf::from("C:/b.mp4"),
+            1,
+            2,
+        );
+
+        assert!(state.fail_stale_sessions());
+        let note = state
+            .queue
+            .get(&stale)
+            .and_then(Task::failure_note)
+            .cloned()
+            .expect("stopped");
+        assert!(note.auth, "the row offers signing in again");
+        assert!(!state.fail_stale_sessions(), "nothing left to stop");
+        assert_eq!(state.next_startable().map(|task| task.id), Some(fine));
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn a_waiting_upload_is_held_while_a_sign_in_or_a_refresh_has_its_profile_open() {
+        let mut state = scratch_state("held");
+        state.accounts.upsert(channel("UCa"));
+        state.accounts.mark_needs_reauth("UCa");
+        let task = state.queue.push(
+            "UCa",
+            PublishSettings::default(),
+            PathBuf::from("C:/a.mp4"),
+            1,
+            1,
+        );
+
+        state.begin_reauth("UCa").expect("reauth");
+        assert!(
+            !state.fail_stale_sessions(),
+            "the sign-in under way is about to fix it"
+        );
+        assert!(state.next_startable().is_none());
+        state.end_reauth("UCa");
+        state.accounts.reauthorised(channel("UCa"), 1);
+
+        state.refreshing = Some("UCa".to_string());
+        assert!(state.next_startable().is_none());
+        state.refreshing = None;
+        assert_eq!(
+            state.next_startable().map(|next| next.id),
+            Some(task.clone())
+        );
+
+        state.running.push(running_on("other", "UCa"));
+        assert!(
+            state.next_startable().is_none(),
+            "one upload per account at a time"
+        );
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
+    fn channel_details_are_fetched_once_and_never_through_a_dead_or_busy_profile() {
+        let mut state = scratch_state("refresh");
+        state.accounts.upsert(youtube::Account {
+            id: "UCa".to_string(),
+            ..Default::default()
+        });
+        state.accounts.upsert(youtube::Account {
+            id: "UCb".to_string(),
+            needs_reauth: true,
+            ..Default::default()
+        });
+
+        assert_eq!(state.account_to_refresh().as_deref(), Some("UCa"));
+        state.running.push(running_on("q1", "UCa"));
+        assert_eq!(
+            state.account_to_refresh(),
+            None,
+            "a headless browser there would stop the upload"
+        );
+        state.running.clear();
+
+        state.refresh_tried.push("UCa".to_string());
+        assert_eq!(
+            state.account_to_refresh(),
+            None,
+            "one still incomplete after a fetch is not fetched again and again"
+        );
+
+        let _ = std::fs::remove_dir_all(&state.directory);
+    }
+
+    #[test]
     fn the_step_transition_eases_out_and_settles() {
         assert_eq!(step_progress(0.0), 0.0);
         assert_eq!(step_progress(STEP_ANIMATION_SECONDS), 1.0);
@@ -1190,11 +1770,13 @@ mod tests {
             Failure::SignInAbandoned,
             Failure::NoChannel,
             Failure::SignedOut,
+            Failure::WrongChannel("m".into()),
             Failure::Timeout("m".into()),
             Failure::PageChanged("m".into()),
             Failure::Rejected("m".into()),
             Failure::Cancelled,
             Failure::Io("m".into()),
+            Failure::Interrupted,
         ];
         for failure in failures {
             let message = failure_message(&failure);
@@ -1249,6 +1831,7 @@ mod tests {
             "youtube.signIn.installChrome",
             "youtube.signIn.getChrome",
             "youtube.accounts.added",
+            "youtube.accounts.busy",
             "youtube.publish.limitHint",
         ] {
             assert_ne!(cutix_i18n::t(key), key, "{key}");
@@ -1358,6 +1941,19 @@ mod tests {
         assert!(!row.failed);
         assert!(row.can_retry);
         assert!(!row.show_bar && !row.can_cancel);
+    }
+
+    #[test]
+    fn an_upload_the_app_closed_on_reads_as_a_sentence_and_waits_for_a_retry() {
+        let mut task = task("Clip");
+        task.state = TaskState::Failed {
+            note: FailureNote::interrupted(),
+        };
+        let row = row_view(&task, None);
+        assert!(row.failed && row.can_retry);
+        let detail = row.detail.expect("detail");
+        assert!(!detail.contains('{'), "{detail}");
+        assert!(!detail.starts_with("youtube."), "{detail}");
     }
 
     #[test]

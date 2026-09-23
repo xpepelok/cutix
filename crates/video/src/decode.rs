@@ -255,23 +255,18 @@ pub fn frame_at_with_color(
         .map(|track| track.timescale())
         .unwrap_or(1000)
         .max(1) as f64;
-    let target_ticks = (seconds.max(0.0) * timescale) as u64;
+    let max_lead = mp4
+        .tracks()
+        .get(&track_id)
+        .map(|track| half_nominal_frame(track.duration().as_secs_f64(), sample_count))
+        .unwrap_or(0.0);
 
-    let mut target_index = 1u32;
-    let mut keyframe_index = 1u32;
-    for index in 1..=sample_count {
-        let Ok(Some(sample)) = mp4.read_sample(track_id, index) else {
-            continue;
-        };
-        if sample.is_sync && sample.start_time <= target_ticks {
-            keyframe_index = index;
-        }
-        if sample.start_time <= target_ticks {
-            target_index = index;
-        } else {
-            break;
-        }
-    }
+    let samples = (1..=sample_count).filter_map(|index| {
+        let sample = mp4.read_sample(track_id, index).ok().flatten()?;
+        Some((index, sample.start_time, sample.is_sync))
+    });
+    let (keyframe_index, target_index) =
+        one_shot_samples(samples, timescale, seconds.max(0.0), max_lead);
 
     let headers = mp4
         .tracks()
@@ -322,11 +317,76 @@ struct SampleEntry {
     is_sync: bool,
 }
 
+pub(crate) fn half_nominal_frame(duration_seconds: f64, frame_count: u32) -> f64 {
+    if duration_seconds > 0.0 && frame_count > 0 {
+        0.5 * duration_seconds / f64::from(frame_count)
+    } else {
+        0.0
+    }
+}
+
+pub(crate) fn next_frame_is_nearer(target: f64, floor: f64, next: f64, max_lead: f64) -> bool {
+    floor <= target && next - target < (target - floor).min(max_lead)
+}
+
+fn nearest_sample(index: &[SampleEntry], seconds: f64, max_lead: f64) -> usize {
+    let floor = index.partition_point(|entry| entry.start_seconds <= seconds);
+    if floor == 0 {
+        return 1;
+    }
+    match index.get(floor) {
+        Some(next)
+            if next_frame_is_nearer(
+                seconds,
+                index[floor - 1].start_seconds,
+                next.start_seconds,
+                max_lead,
+            ) =>
+        {
+            floor + 1
+        }
+        _ => floor,
+    }
+}
+
+fn one_shot_samples(
+    samples: impl IntoIterator<Item = (u32, u64, bool)>,
+    timescale: f64,
+    seconds: f64,
+    max_lead: f64,
+) -> (u32, u32) {
+    let mut target_index = 1u32;
+    let mut target_start: Option<f64> = None;
+    let mut keyframe_index = 1u32;
+    for (index, start_ticks, is_sync) in samples {
+        let start = start_ticks as f64 / timescale;
+        if start <= seconds {
+            if is_sync {
+                keyframe_index = index;
+            }
+            target_index = index;
+            target_start = Some(start);
+            continue;
+        }
+        if let Some(floor) = target_start
+            && next_frame_is_nearer(seconds, floor, start, max_lead)
+        {
+            if is_sync {
+                keyframe_index = index;
+            }
+            target_index = index;
+        }
+        break;
+    }
+    (keyframe_index, target_index)
+}
+
 pub struct NativeStream {
     mp4: mp4::Mp4Reader<BufReader<File>>,
     track_id: u32,
     timescale: f64,
     sample_count: u32,
+    max_lead: f64,
     index: Vec<SampleEntry>,
     indexed_through: u32,
     decoder: Option<Decoder>,
@@ -362,6 +422,7 @@ impl NativeStream {
         let track_id = track.track_id();
         let timescale = track.timescale().max(1) as f64;
         let sample_count = track.sample_count();
+        let max_lead = half_nominal_frame(track.duration().as_secs_f64(), sample_count);
         let info = VideoInfo {
             width: track.width(),
             height: track.height(),
@@ -376,6 +437,7 @@ impl NativeStream {
             track_id,
             timescale,
             sample_count,
+            max_lead,
             index: Vec::new(),
             indexed_through: 0,
             decoder: None,
@@ -438,10 +500,7 @@ impl NativeStream {
         let seconds = seconds.max(0.0);
         self.index_covering(seconds);
 
-        let found = self
-            .index
-            .partition_point(|entry| entry.start_seconds <= seconds);
-        (found.max(1) as u32).min(self.sample_count.max(1))
+        (nearest_sample(&self.index, seconds, self.max_lead) as u32).min(self.sample_count.max(1))
     }
 
     pub fn decode_health(&self) -> (u64, u64) {
@@ -600,6 +659,90 @@ mod tests {
     #[test]
     fn annex_b_of_empty_input_is_empty() {
         assert!(annex_b(&[]).is_empty());
+    }
+
+    fn entries(starts: &[f64]) -> Vec<SampleEntry> {
+        starts
+            .iter()
+            .map(|start| SampleEntry {
+                start_seconds: *start,
+                is_sync: false,
+            })
+            .collect()
+    }
+
+    const HALF_60: f64 = 0.5 / 60.0;
+
+    #[test]
+    fn a_cut_between_frames_takes_the_nearest_one() {
+        let index = entries(&[0.0, 0.0172, 0.0339, 0.0505]);
+        assert_eq!(nearest_sample(&index, 1.0 / 60.0, HALF_60), 2);
+        assert_eq!(nearest_sample(&index, 0.0339 + 0.001, HALF_60), 3);
+        assert_eq!(nearest_sample(&index, 0.0339 + 0.01, HALF_60), 4);
+    }
+
+    #[test]
+    fn a_time_exactly_between_frames_keeps_the_earlier_one() {
+        let index = entries(&[0.0, 0.5, 1.0]);
+        assert_eq!(nearest_sample(&index, 0.25, 0.25), 1);
+        assert_eq!(nearest_sample(&index, 0.75, 0.25), 2);
+    }
+
+    #[test]
+    fn times_outside_the_index_clamp_to_its_ends() {
+        let index = entries(&[0.1, 0.2]);
+        assert_eq!(nearest_sample(&index, 0.0, HALF_60), 1);
+        assert_eq!(nearest_sample(&index, 5.0, HALF_60), 2);
+        assert_eq!(nearest_sample(&[], 1.0, HALF_60), 1);
+    }
+
+    #[test]
+    fn a_frame_across_a_variable_rate_gap_is_not_shown_early() {
+        let index = entries(&[2.9667, 3.0, 4.0, 4.0333]);
+        let half_30 = half_nominal_frame(1.0, 30);
+        assert_eq!(nearest_sample(&index, 3.6, half_30), 2);
+        assert_eq!(nearest_sample(&index, 3.99, half_30), 3);
+    }
+
+    #[test]
+    fn an_unknown_rate_keeps_the_floor() {
+        assert_eq!(half_nominal_frame(0.0, 30), 0.0);
+        assert_eq!(half_nominal_frame(1.0, 0), 0.0);
+        let index = entries(&[0.0, 0.0172]);
+        assert_eq!(nearest_sample(&index, 0.017, 0.0), 1);
+    }
+
+    #[test]
+    fn the_one_shot_decode_picks_the_frame_playback_shows() {
+        let starts = [0u64, 33, 51, 67];
+        let timescale = 1_000.0;
+        let seconds = 0.0422;
+        let half_30 = half_nominal_frame(1.0, 30);
+        let samples = starts
+            .iter()
+            .enumerate()
+            .map(|(offset, start)| (offset as u32 + 1, *start, offset == 0));
+        let (keyframe, target) = one_shot_samples(samples, timescale, seconds, half_30);
+        let index = entries(
+            &starts
+                .iter()
+                .map(|start| *start as f64 / timescale)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(target, 3);
+        assert_eq!(target as usize, nearest_sample(&index, seconds, half_30));
+        assert_eq!(keyframe, 1);
+    }
+
+    #[test]
+    fn the_one_shot_decode_keeps_the_floor_across_a_gap() {
+        let samples = [(1u32, 0u64, true), (2, 3_000, false), (3, 4_000, true)];
+        let (keyframe, target) =
+            one_shot_samples(samples, 1_000.0, 3.6, half_nominal_frame(1.0, 30));
+        assert_eq!((keyframe, target), (1, 2));
+        let (keyframe, target) =
+            one_shot_samples(samples, 1_000.0, 3.99, half_nominal_frame(1.0, 30));
+        assert_eq!((keyframe, target), (3, 3));
     }
 
     #[test]

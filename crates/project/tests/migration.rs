@@ -259,7 +259,10 @@ fn migrates_rich_v2_document_with_web_semantics() {
     assert!(mask["params"].get("position").is_none());
 
     assert_eq!(element["transition"]["easing"].as_str(), Some("easeInOut"));
-    assert_eq!(element["transition"]["duration"].as_f64(), Some(1.0));
+    assert_eq!(
+        element["transition"]["duration"].as_f64(),
+        Some(0.5 * TICKS_PER_SECOND)
+    );
 
     let bindings = &element["animations"]["bindings"];
     assert!(bindings.get("transform.position").is_none());

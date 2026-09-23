@@ -251,6 +251,36 @@ pub struct Chord {
     pub key: String,
 }
 
+const TEXT_FIELD_KEYS: &[&str] = &[
+    "a",
+    "c",
+    "v",
+    "x",
+    "backspace",
+    "delete",
+    "left",
+    "right",
+    "up",
+    "down",
+    "home",
+    "end",
+    "enter",
+    "space",
+    "tab",
+];
+
+impl Chord {
+    pub fn belongs_to_text_field(&self) -> bool {
+        if self.alt {
+            return false;
+        }
+        if !self.control {
+            return true;
+        }
+        TEXT_FIELD_KEYS.contains(&self.key.as_str())
+    }
+}
+
 const NAMED_KEYS: &[&str] = &[
     "up",
     "down",
@@ -437,8 +467,6 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn unbind(&mut self, chord: &Chord) {
         if self.map.remove(chord).is_some() {
@@ -446,15 +474,11 @@ impl Keybindings {
         }
     }
 
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
@@ -604,6 +628,24 @@ pub fn save(bindings: &Keybindings) {
 mod tests {
     use super::*;
     use gpui::Modifiers;
+
+    #[test]
+    fn a_focused_field_keeps_its_editing_chords_from_the_timeline() {
+        let chord = |control, alt, key: &str| Chord::new(control, alt, false, key.to_string());
+        assert!(chord(false, false, "s").belongs_to_text_field());
+        assert!(chord(true, false, "v").belongs_to_text_field());
+        assert!(chord(true, false, "a").belongs_to_text_field());
+        assert!(!chord(true, false, "s").belongs_to_text_field());
+        assert!(!chord(false, true, "v").belongs_to_text_field());
+    }
+
+    #[test]
+    fn undo_and_redo_reach_the_timeline_even_while_a_field_is_focused() {
+        let chord = |shift, key: &str| Chord::new(true, false, shift, key.to_string());
+        assert!(!chord(false, "z").belongs_to_text_field());
+        assert!(!chord(true, "z").belongs_to_text_field());
+        assert!(!chord(false, "y").belongs_to_text_field());
+    }
 
     #[test]
     fn every_action_has_a_unique_id_and_a_translated_description() {

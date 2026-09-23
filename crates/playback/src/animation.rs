@@ -201,13 +201,10 @@ fn discrete_channel_value(
     let AnimationChannel::Discrete { keys } = channel else {
         return None;
     };
-    let mut result = None;
-    for key in keys {
-        if key.time <= time {
-            result = Some(key.value.clone());
-        }
-    }
-    result
+    keys.iter()
+        .filter(|key| key.time <= time)
+        .max_by_key(|key| key.time)
+        .map(|key| key.value.clone())
 }
 
 pub fn scalar_at(
@@ -272,4 +269,39 @@ pub fn has_channel(animations: Option<&ElementAnimations>, path: &str) -> bool {
 pub fn local_time(time: MediaTime, start: MediaTime, duration: MediaTime) -> MediaTime {
     let local = time - start;
     local.clamp(MediaTime::ZERO, duration)
+}
+
+#[cfg(test)]
+mod discrete_tests {
+    use super::discrete_channel_value;
+    use cutix_project::model::{AnimationChannel, DiscreteAnimationKey};
+    use serde_json::json;
+    use time::MediaTime;
+
+    fn key(id: &str, ticks: i64, value: &str) -> DiscreteAnimationKey {
+        DiscreteAnimationKey {
+            id: id.to_owned(),
+            time: MediaTime::from_ticks(ticks),
+            value: json!(value),
+        }
+    }
+
+    #[test]
+    fn an_out_of_order_discrete_key_does_not_override_a_later_one() {
+        let channel = AnimationChannel::Discrete {
+            keys: vec![key("late", 200, "late"), key("early", 100, "early")],
+        };
+        assert_eq!(
+            discrete_channel_value(&channel, MediaTime::from_ticks(250)),
+            Some(json!("late"))
+        );
+        assert_eq!(
+            discrete_channel_value(&channel, MediaTime::from_ticks(150)),
+            Some(json!("early"))
+        );
+        assert_eq!(
+            discrete_channel_value(&channel, MediaTime::from_ticks(50)),
+            None
+        );
+    }
 }

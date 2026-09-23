@@ -7,10 +7,8 @@ use crate::assets::icon;
 use crate::interaction::{mix, OverlayFrame, OverlaySide};
 use crate::theme::{opacity, rem, Palette, RADIUS_MD, RADIUS_SM, TEXT_SM};
 
-/// A GPUI listener for a hover state change, ready to hand to `on_hover`.
 pub type HoverHandler = Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>;
 
-/// A GPUI listener for a mouse-down, ready to hand to `on_mouse_down`.
 pub type PressHandler = Box<dyn Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static>;
 
 pub const BUTTON_GAP_PX: f32 = 8.0;
@@ -549,13 +547,9 @@ pub fn menu_natural_height(items: usize, item_height: f32) -> f32 {
     items as f32 * item_height + MENU_PAD_PX * 2.0 + 2.0
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub const MENU_ITEM_PAD_Y_PX: f32 = 6.0;
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn place_menu(
     frame: OverlayFrame,

@@ -1,8 +1,3 @@
-//! `Editor`: every mutation the user can make to a timeline, as a method.
-//!
-//! Each one takes a snapshot for the undo stack before it changes anything, so a
-//! command that fails partway cannot leave a state the history cannot describe.
-
 use super::*;
 
 pub struct Editor<'a> {
@@ -16,8 +11,6 @@ pub struct Editor<'a> {
 }
 
 impl<'a> Editor<'a> {
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn restore_reverse(&mut self, element_id: &str) -> bool {
         self.mutate("reverse", element_id, move |element| {
@@ -35,8 +28,6 @@ impl<'a> Editor<'a> {
         })
     }
 
-    /// Only the tests in this file ask for this; compiled for them alone so the
-    /// shipping binary does not carry a method nothing calls.
     #[cfg(test)]
     pub fn reverse_element(
         &mut self,
@@ -69,10 +60,6 @@ impl<'a> Editor<'a> {
         self.project.scenes.iter_mut().find(|scene| scene.id == id)
     }
 
-    /// Runs `edit` against the scene's tracks, taking an undo snapshot first.
-    ///
-    /// Open to the rest of the editor: `captions` builds its own multi-step commands out
-    /// of this rather than repeating the snapshot bookkeeping.
     pub(crate) fn commit<F>(&mut self, label: &'static str, edit: F) -> bool
     where
         F: FnOnce(&mut SceneTracks, &mut Vec<String>) -> bool,
@@ -424,6 +411,7 @@ impl<'a> Editor<'a> {
         self.commit("split", move |tracks, selection| {
             let mut created = Vec::new();
             let mut dropped: Vec<String> = Vec::new();
+            let mut trimmed: Vec<String> = Vec::new();
             for track in tracks_mut(tracks) {
                 let mut additions = Vec::new();
                 for element in track.elements_mut().iter_mut() {
@@ -452,7 +440,9 @@ impl<'a> Editor<'a> {
                     right_fields.start_time = time;
                     right_fields.duration = right_visible;
                     right_fields.trim_start = add(base.trim_start, left_span);
-                    if retain != Retain::Left {
+                    if retain == Retain::Left {
+                        trimmed.push(base.id.clone());
+                    } else {
                         created.push(right_fields.id.clone());
                         additions.push(right);
                     }
@@ -470,9 +460,10 @@ impl<'a> Editor<'a> {
                     .elements_mut()
                     .retain(|element| !dropped.contains(&element.base().id));
             }
-            if created.is_empty() && dropped.is_empty() {
+            if created.is_empty() && dropped.is_empty() && trimmed.is_empty() {
                 return false;
             }
+            created.extend(trimmed);
             *selection = created;
             true
         })

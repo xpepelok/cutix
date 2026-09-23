@@ -149,6 +149,10 @@ impl Transitions {
             .values()
             .any(|track| track.started.elapsed() < TRANSITION && track.from != track.target)
     }
+
+    pub fn retain(&mut self, keep: impl Fn(&str) -> bool) {
+        self.tracks.retain(|key, _| keep(key));
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

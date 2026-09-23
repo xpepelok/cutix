@@ -1,3 +1,4 @@
+use crate::clock::Zone;
 use crate::failure::{Failure, FailureNote};
 use crate::publish::PublishSettings;
 use crate::studio::Stage;
@@ -6,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 pub const QUEUE_FILE: &str = "youtube-queue.json";
 const MAX_TASKS: usize = 100;
+
+const STAMPS_ARE_UTC: u32 = 1;
+const CURRENT_FORMAT: u32 = STAMPS_ARE_UTC;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "lowercase")]
@@ -108,22 +112,52 @@ pub fn new_id(now: i64, counter: u64) -> String {
     format!("q{now:x}-{counter:x}")
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Queue {
     #[serde(default)]
     pub tasks: Vec<Task>,
     #[serde(default)]
     counter: u64,
+    #[serde(default)]
+    format: u32,
+}
+
+impl Default for Queue {
+    fn default() -> Self {
+        Self {
+            tasks: Vec::new(),
+            counter: 0,
+            format: CURRENT_FORMAT,
+        }
+    }
 }
 
 impl Queue {
     pub fn load(directory: &Path) -> Self {
+        Self::load_in(directory, Zone::Local)
+    }
+
+    pub fn load_in(directory: &Path, zone: Zone) -> Self {
         let Ok(text) = std::fs::read_to_string(directory.join(QUEUE_FILE)) else {
             return Self::default();
         };
         let mut queue: Self = serde_json::from_str(&text).unwrap_or_default();
+        queue.upgrade_format(zone);
         queue.reclaim_interrupted();
         queue
+    }
+
+    fn upgrade_format(&mut self, zone: Zone) {
+        if self.format < STAMPS_ARE_UTC {
+            for task in &mut self.tasks {
+                if let Some(stamp) = task.settings.publish_at.as_deref()
+                    && let Some(converted) = crate::utc_stamp_of_local_digits(stamp, zone)
+                {
+                    task.settings.publish_at = Some(converted);
+                }
+            }
+        }
+        self.format = CURRENT_FORMAT;
     }
 
     pub fn save(&self, directory: &Path) -> std::io::Result<()> {
@@ -136,7 +170,9 @@ impl Queue {
     pub fn reclaim_interrupted(&mut self) {
         for task in &mut self.tasks {
             if task.state == TaskState::Running {
-                task.state = TaskState::Waiting;
+                task.state = TaskState::Failed {
+                    note: FailureNote::interrupted(),
+                };
                 task.percent = 0;
                 task.stage = Stage::Opening;
             }
@@ -490,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn an_upload_interrupted_by_a_restart_comes_back_waiting_and_starts_over() {
+    fn an_upload_interrupted_by_a_restart_waits_for_the_person_before_it_goes_again() {
         let directory = temp_dir("restart");
         let mut queue = queue_with(1);
         let id = queue.tasks[0].id.clone();
@@ -501,15 +537,23 @@ mod tests {
         let text = std::fs::read_to_string(directory.join(QUEUE_FILE)).expect("read");
         assert!(text.contains("running"));
 
-        let reloaded = Queue::load(&directory);
+        let mut reloaded = Queue::load(&directory);
         let task = reloaded.get(&id).expect("task");
-        assert_eq!(
-            task.state,
-            TaskState::Waiting,
-            "no ghost uploading row survives a restart"
-        );
+        let note = task.failure_note().expect("it is marked as stopped");
+        assert!(note.worth_retrying(), "one press puts it back");
+        assert!(!note.auth && !note.cancelled);
         assert_eq!(task.percent, 0, "the browser that held those bytes is gone");
-        assert_eq!(reloaded.running(), None);
+        assert_eq!(reloaded.running(), None, "no ghost uploading row survives");
+        assert!(
+            reloaded.next_waiting().is_none(),
+            "Studio may already have the video, so nothing starts it again unasked"
+        );
+
+        assert!(reloaded.retry(&id));
+        assert_eq!(
+            reloaded.next_waiting().map(|task| task.id.clone()),
+            Some(id)
+        );
 
         let _ = std::fs::remove_dir_all(&directory);
     }
@@ -572,6 +616,84 @@ mod tests {
         assert_eq!(task.total, 2_048);
         assert_eq!(task.percent, 0, "the old byte offset means nothing now");
         assert_eq!(task.state, TaskState::Waiting);
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_schedule_queued_by_the_previous_build_is_read_on_the_clock_it_was_picked_on() {
+        let directory = temp_dir("legacy-schedule");
+        std::fs::create_dir_all(&directory).expect("mkdir");
+        let legacy = r#"{"tasks":[
+            {"id":"q1","account_id":"chan","settings":{"title":"scheduled","description":"",
+             "tags":[],"category_id":"22","privacy":"private","made_for_kids":false,
+             "age_restricted":false,"publish_at":"2026-09-23T15:00:00Z","notify_subscribers":true},
+             "source":"C:/videos/a.mp4","total":10,"queued_at":1,"state":"waiting"},
+            {"id":"q2","account_id":"chan","settings":{"title":"plain","description":"",
+             "tags":[],"category_id":"22","privacy":"private","made_for_kids":false,
+             "age_restricted":false,"publish_at":null,"notify_subscribers":true},
+             "source":"C:/videos/b.mp4","total":10,"queued_at":2,"state":"waiting"},
+            {"id":"q3","account_id":"chan","settings":{"title":"interrupted","description":"",
+             "tags":[],"category_id":"22","privacy":"private","made_for_kids":false,
+             "age_restricted":false,"publish_at":"2026-09-24T01:30:00Z","notify_subscribers":true},
+             "source":"C:/videos/c.mp4","total":10,"queued_at":3,"state":"running"}
+        ],"counter":3}"#;
+        std::fs::write(directory.join(QUEUE_FILE), legacy).expect("write");
+
+        let moscow = Zone::Fixed(3 * 3_600);
+        let queue = Queue::load_in(&directory, moscow);
+        assert_eq!(
+            queue
+                .get("q1")
+                .and_then(|task| task.settings.publish_at.as_deref()),
+            Some("2026-09-23T12:00:00Z"),
+            "the instant 15:00 Moscow names, so Studio is typed 3:00 PM again"
+        );
+        assert_eq!(
+            queue
+                .get("q2")
+                .and_then(|task| task.settings.publish_at.as_deref()),
+            None
+        );
+        assert_eq!(
+            queue
+                .get("q3")
+                .and_then(|task| task.settings.publish_at.as_deref()),
+            Some("2026-09-23T22:30:00Z"),
+            "a stopped row is converted too: it may be retried"
+        );
+
+        queue.save(&directory).expect("save");
+        let text = std::fs::read_to_string(directory.join(QUEUE_FILE)).expect("read");
+        assert!(text.contains("\"format\": 1"));
+        let reloaded = Queue::load_in(&directory, moscow);
+        assert_eq!(
+            reloaded
+                .get("q1")
+                .and_then(|task| task.settings.publish_at.as_deref()),
+            Some("2026-09-23T12:00:00Z")
+        );
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_queue_made_in_this_build_is_current_and_its_schedules_are_kept_as_they_are() {
+        let directory = temp_dir("current-schedule");
+        let mut queue = Queue::default();
+        let mut scheduled = settings("later");
+        scheduled.publish_at = Some("2030-01-02T15:04:05Z".to_string());
+        let id = queue.push("chan", scheduled, PathBuf::from("C:/x.mp4"), 10, 1);
+        queue.save(&directory).expect("save");
+
+        let reloaded = Queue::load_in(&directory, Zone::Fixed(3 * 3_600));
+        assert_eq!(
+            reloaded
+                .get(&id)
+                .and_then(|task| task.settings.publish_at.as_deref()),
+            Some("2030-01-02T15:04:05Z"),
+            "a stamp this build wrote is already the instant"
+        );
 
         let _ = std::fs::remove_dir_all(&directory);
     }

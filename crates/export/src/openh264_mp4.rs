@@ -67,17 +67,6 @@ impl OpenH264Mp4Backend {
             .ok_or(ExportError::InvalidFrameRate)?;
         let sample_duration = ((TIMESCALE as f64) / fps).round() as u32;
 
-        // OpenH264 can only hold a target bitrate by dropping frames when it overshoots,
-        // and an export that silently drops frames produces a file shorter than the
-        // timeline. Frame skipping therefore stays off, which means bitrate targeting is
-        // not a promise this encoder can keep — declaring one makes the library print a
-        // warning and ignore it. The export quality is carried as a fixed quantiser
-        // instead, which quality-mode rate control really does honour.
-        //
-        // OpenH264 still prints "bitrate can't be controlled ... without enabling skip
-        // frame" on open. That warning is accurate and is the contract we want: bitrate is
-        // not controlled here. Enabling frame skip to silence it would trade a correct
-        // frame count for a bitrate nobody asked this backend to hold.
         let quantiser = spec.quality.quantiser();
         let config = EncoderConfig::new()
             .max_frame_rate(EncoderFrameRate::from_hz(fps as f32))

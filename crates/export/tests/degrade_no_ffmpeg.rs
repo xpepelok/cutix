@@ -10,8 +10,6 @@ use serde_json::json;
 use time::{FrameRate, MediaTime};
 
 fn without_ffmpeg() {
-    // Mutating the environment is unsound while another thread may be reading it.
-    // This runs once, before any decoder thread exists.
     unsafe { std::env::set_var(video::ffmpeg::DISABLE_ENV, "1") };
 }
 

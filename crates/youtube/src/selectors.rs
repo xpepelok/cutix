@@ -74,6 +74,8 @@ pub mod studio {
         )
     }
     pub const SCHEDULE_TOGGLE: &str = "#second-container-expand-button";
+    pub const SCHEDULE_DATE_TRIGGER: &str = "#datepicker-trigger";
+    pub const SCHEDULE_DATE_INPUT: &str = "ytcp-date-picker tp-yt-paper-dialog input";
     pub const SCHEDULE_DATE: &str = "#datepicker-trigger input";
     pub const SCHEDULE_TIME: &str = "#time-of-day-container input";
 }

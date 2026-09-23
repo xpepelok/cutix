@@ -61,10 +61,6 @@ const STRETCH_SEARCH: usize = 128;
 
 const STRETCH_CORRELATION: usize = 192;
 
-/// The lookahead the stretcher needs beyond the chunk itself, in seconds.
-///
-/// Zero at a speed the stretcher does not act on, because there it hands the chunk back
-/// untouched and has no use for the extra frames.
 fn stretch_lookahead(speed: f64, rate: u32) -> f64 {
     if (speed - 1.0).abs() < PITCH_TOLERANCE {
         0.0
@@ -73,19 +69,11 @@ fn stretch_lookahead(speed: f64, rate: u32) -> f64 {
     }
 }
 
-/// How many source frames one feed chunk covers, lookahead included.
 fn chunk_frames(speed: f64, rate: u32) -> usize {
     (CHUNK_SECONDS * rate.max(1) as f64 * speed) as usize
         + (stretch_lookahead(speed, rate) * rate.max(1) as f64) as usize
 }
 
-/// How far ahead of the playhead `queued_through` is allowed to sit before the queue is
-/// treated as belonging to some other position.
-///
-/// This has to cover a queue filled to [`QUEUE_CEILING_SECONDS`] plus the whole chunk that
-/// crossed the ceiling, lookahead and all. A bound that does not reach that far reads a
-/// merely full queue as a discontinuity, and `feed` answers a discontinuity by flushing the
-/// output and refilling it — every call, which is heard as a buzz rather than as playback.
 fn queue_reach(speed: f64, rate: u32) -> f64 {
     (QUEUE_CEILING_SECONDS + CHUNK_SECONDS) * speed + stretch_lookahead(speed, rate)
 }
@@ -453,8 +441,6 @@ impl Speaker {
     }
 }
 
-/// Only the tests in this file ask for this; compiled for them alone so the shipping
-/// binary does not carry something nothing calls.
 #[cfg(test)]
 pub fn frame_index(seconds: f64, sample_rate: u32) -> usize {
     if !seconds.is_finite() || seconds <= 0.0 {
@@ -673,18 +659,12 @@ mod tests {
         assert!(speaker.window_needed(path, 5.0).is_some());
     }
 
-    /// The span `feed` may queue ahead of the playhead has to stay inside the span
-    /// `follows_on` accepts. When it does not, a queue filled to the ceiling reads as a
-    /// discontinuity, `feed` flushes the output and refills it from the playhead, and it
-    /// does that on every call — which is heard as a buzz rather than as playback.
     #[test]
     fn a_full_queue_still_reads_as_continuous() {
         for rate in [44_100u32, 48_000, 96_000] {
             for speed in [1.0f64, 0.5, 2.0] {
                 let reach = queue_reach(speed, rate);
 
-                // The worst case: the queue sat one sample under the ceiling and one more
-                // whole chunk went in on top of it.
                 let chunk = chunk_frames(speed, rate) as f64 / rate as f64;
                 let queued = QUEUE_CEILING_SECONDS * speed + chunk;
 

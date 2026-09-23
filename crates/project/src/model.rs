@@ -395,14 +395,6 @@ pub struct BaseElementFields {
     pub animations: Option<ElementAnimations>,
 }
 
-/// One item on a timeline track.
-///
-/// The variants differ a good deal in size — a text element carries its styling, a video
-/// element only a media id and a transform — but they are not boxed. A timeline holds
-/// these in a `Vec` it iterates constantly during composition, and every one of them is
-/// deserialised straight from the project document; boxing would add an allocation and a
-/// pointer chase per element to save space in a collection that is already sized by its
-/// largest member.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]

@@ -60,6 +60,15 @@ impl Session {
         login::sign_out(&mut self.connection, &self.page)
     }
 
+    pub fn clear_cookies(&mut self) -> Result<(), Failure> {
+        self.page.call(
+            &mut self.connection,
+            "Network.clearBrowserCookies",
+            serde_json::json!({}),
+        )?;
+        Ok(())
+    }
+
     pub fn close(&mut self) {
         self.connection.close_browser();
         self.browser.wait_for_exit(SHUTDOWN_TIMEOUT);
@@ -155,21 +164,107 @@ pub fn sign_in(
     ))
 }
 
+pub fn reauth(
+    data_directory: &Path,
+    account_id: &str,
+    now: i64,
+    still_open: &mut dyn FnMut() -> bool,
+) -> Result<(crate::Account, Option<Vec<u8>>), Failure> {
+    let profile = profile_directory(data_directory, account_id);
+    let mut browser = Browser::launch_at(&profile, false, login::SIGN_IN_URL)?;
+    let port = browser.port;
+
+    let watched = {
+        let mut open = || browser.is_running() && still_open();
+        if login::any_tab_signed_in(port) {
+            Ok(())
+        } else {
+            login::watch_for_sign_in(port, &mut open).map(drop)
+        }
+    };
+    if !still_open() {
+        return Err(Failure::Cancelled);
+    }
+    watched?;
+
+    let mut connection = Connection::connect(&browser.websocket_url)?;
+    let page = connection.open("about:blank")?;
+    present_as_a_visible_browser(&mut connection, &page);
+
+    let mut session = Session {
+        browser,
+        connection,
+        page,
+    };
+
+    let landed = login::wait_for_channel_at(
+        &mut session.connection,
+        &session.page,
+        &login::channel_studio_url(account_id),
+    );
+    if !still_open() {
+        session.close();
+        return Err(Failure::Cancelled);
+    }
+    let signed_in = match landed {
+        Ok(id) => id,
+        Err(failure) => {
+            session.close();
+            return Err(failure);
+        }
+    };
+    if signed_in != account_id {
+        let landed = session.decorations().title;
+        if session.clear_cookies().is_err() {
+            let _ = session.sign_out();
+        }
+        session.close();
+        let named = if landed.trim().is_empty() {
+            signed_in
+        } else {
+            landed
+        };
+        return Err(Failure::WrongChannel(named));
+    }
+
+    let mut shown = Decorations::default();
+    for _ in 0..DECORATION_ATTEMPTS {
+        if !still_open() {
+            break;
+        }
+        std::thread::sleep(DECORATION_INTERVAL);
+        shown = session.decorations();
+        if !shown.title.trim().is_empty() {
+            break;
+        }
+    }
+    session.close();
+    if !still_open() {
+        return Err(Failure::Cancelled);
+    }
+
+    Ok((
+        crate::Account {
+            id: account_id.to_string(),
+            title: shown.title,
+            handle: shown.handle,
+            avatar_url: shown.avatar_url,
+            avatar_file: None,
+            added_at: 0,
+            refreshed_at: now,
+            needs_reauth: false,
+        },
+        shown.avatar,
+    ))
+}
+
 const DECORATION_ATTEMPTS: usize = 15;
 const DECORATION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// What a studio page tells us about the signed-in channel.
-///
-/// Every text field may come back empty when the page has not finished rendering, so a
-/// caller keeps whatever it already knew rather than overwriting it with a blank.
 pub struct ChannelDecorations {
-    /// The channel's display name.
     pub title: String,
-    /// The channel's handle, including the leading `@`.
     pub handle: String,
-    /// Where the avatar is served from.
     pub avatar_url: String,
-    /// The avatar image bytes, when the page served them directly.
     pub avatar: Option<Vec<u8>>,
 }
 

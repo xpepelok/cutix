@@ -4,7 +4,6 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
 def strip_rust(text):
     out = []
     index = 0
@@ -69,9 +68,7 @@ def strip_rust(text):
         index += 1
     return "".join(out)
 
-
 REGEX_PRECEDERS = set("(,=:[!&|?{};+-*%~^<>") | {"return", "typeof", "case", "in", "of", "do", "else", "yield", "await", "new", "delete", "void", "instanceof"}
-
 
 def starts_a_regex(before):
     """Whether a `/` at this point opens a regular expression rather than dividing."""
@@ -87,7 +84,6 @@ def starts_a_regex(before):
             continue
         break
     return word in REGEX_PRECEDERS
-
 
 def strip_web(text):
     out = []
@@ -147,7 +143,6 @@ def strip_web(text):
         index += 1
     return "".join(out)
 
-
 def tidy(text):
     lines = [line.rstrip() for line in text.split("\n")]
     kept = []
@@ -161,14 +156,12 @@ def tidy(text):
         kept.pop()
     return "\n".join(kept) + "\n"
 
-
 def walk(root, suffixes):
     for base, dirs, names in os.walk(root):
         dirs[:] = [d for d in dirs if d not in ("target", "node_modules", ".next", ".git")]
         for name in names:
             if name.endswith(suffixes):
                 yield os.path.join(base, name)
-
 
 def main():
     which = sys.argv[1]
@@ -192,6 +185,5 @@ def main():
                     handle.write(after)
                 changed += 1
     print(changed, "files")
-
 
 main()

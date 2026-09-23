@@ -1,5 +1,3 @@
-//! Reading and reaching into an element's effect chain and its transition.
-
 use super::*;
 
 pub fn effects_mut(element: &mut TimelineElement) -> Option<&mut Option<Vec<Effect>>> {

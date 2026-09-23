@@ -23,10 +23,6 @@ pub fn audio_sample_duration(sample_rate: u32) -> Option<u32> {
         .then(|| (numerator / denominator) as u32)
 }
 
-/// How audio will be delivered for an MP4 written by this sink.
-///
-/// Decided from the probed capabilities before the destination file is created, so the
-/// caller can tell the user what it is about to produce.
 pub fn audio_support() -> AudioSupport {
     match crate::capabilities::ExportCapabilities::probe().audio_strategy() {
         crate::capabilities::AudioStrategy::Aac => AudioSupport::Muxed,
@@ -46,8 +42,8 @@ pub struct Mp4Sink {
     destination: PathBuf,
     spec: VideoSpec,
     writer: Option<Mp4Writer<BufWriter<File>>>,
+    video_timescale: u32,
     track_added: bool,
-    sample_duration: u32,
     frames: u64,
     audio_frames: u64,
     audio_path: Option<PathBuf>,
@@ -64,16 +60,14 @@ impl Mp4Sink {
                 height: spec.height,
             });
         }
-        let fps = spec
-            .frame_rate
-            .as_f64()
-            .filter(|value| *value > 0.0)
-            .ok_or(ExportError::InvalidFrameRate)?;
-        let sample_duration = ((TIMESCALE as f64) / fps).round() as u32;
-        if sample_duration == 0 {
+        let rate = spec.frame_rate;
+        if !rate.is_valid()
+            || u64::from(rate.numerator) > TIMESCALE as u64 * u64::from(rate.denominator)
+        {
             return Err(ExportError::InvalidFrameRate);
         }
 
+        let video_timescale = video_timescale(rate);
         let file = File::create(destination).map_err(|error| ExportError::Io {
             path: destination.display().to_string(),
             detail: error.to_string(),
@@ -89,7 +83,7 @@ impl Mp4Sink {
                     str::parse("avc1").unwrap_or_default(),
                     str::parse("mp41").unwrap_or_default(),
                 ],
-                timescale: TIMESCALE,
+                timescale: video_timescale,
             },
         )
         .map_err(|error| ExportError::Muxer(error.to_string()))?;
@@ -98,8 +92,8 @@ impl Mp4Sink {
             destination: destination.to_path_buf(),
             spec,
             writer: Some(writer),
+            video_timescale,
             track_added: false,
-            sample_duration,
             frames: 0,
             audio_frames: 0,
             audio_path: None,
@@ -122,7 +116,7 @@ impl Mp4Sink {
             writer
                 .add_track(&TrackConfig {
                     track_type: TrackType::Video,
-                    timescale: TIMESCALE,
+                    timescale: self.video_timescale,
                     language: "und".to_owned(),
                     media_conf: MediaConfig::AvcConfig(AvcConfig {
                         width: self.spec.width as u16,
@@ -137,12 +131,15 @@ impl Mp4Sink {
 
         let writer = self.writer.as_mut().expect("writer");
         for sample in self.pending.drain(..) {
+            let rate = self.spec.frame_rate;
+            let start_time = frame_start(rate, self.frames, self.video_timescale);
+            let duration = frame_start(rate, self.frames + 1, self.video_timescale) - start_time;
             writer
                 .write_sample(
                     1,
                     &Mp4Sample {
-                        start_time: self.frames * self.sample_duration as u64,
-                        duration: self.sample_duration,
+                        start_time,
+                        duration: duration as u32,
                         rendering_offset: 0,
                         is_sync: sample.is_sync,
                         bytes: Bytes::from(sample.bytes),
@@ -208,10 +205,6 @@ impl Mp4Sink {
             return self.write_sidecar(audio);
         }
 
-        // The capability probe answers for the AAC encoder specifically, but opening one
-        // for this particular sample rate and channel count can still fail. The video
-        // track is already on disk by now, so a failure here falls back to a sidecar WAV
-        // rather than throwing away a finished render.
         let track = match aac::encode(audio) {
             Ok(track) => track,
             Err(_) => return self.write_sidecar(audio),
@@ -369,11 +362,34 @@ pub(crate) fn patch_sl_config_predefined(path: &Path) -> Result<bool> {
     Ok(patched)
 }
 
-/// The H.264 parameter sets carried by a bitstream: `(sequence set, picture set)`.
+const MAX_TIMESCALE_MULTIPLE: u64 = 16;
+
+fn video_timescale(rate: time::FrameRate) -> u32 {
+    let numerator = u64::from(rate.numerator);
+    let per_frame = u64::from(TIMESCALE) * u64::from(rate.denominator);
+    let multiple = numerator / gcd(numerator, per_frame).max(1);
+    if (1..=MAX_TIMESCALE_MULTIPLE).contains(&multiple) {
+        TIMESCALE * multiple as u32
+    } else {
+        TIMESCALE
+    }
+}
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+fn frame_start(rate: time::FrameRate, index: u64, timescale: u32) -> u64 {
+    let numerator = u128::from(rate.numerator);
+    let scaled = u128::from(index) * u128::from(timescale) * u128::from(rate.denominator);
+    ((scaled + numerator / 2) / numerator) as u64
+}
+
 type ParameterSets = (Vec<u8>, Vec<u8>);
 
-/// Splits an Annex B bitstream into its parameter sets, if it carries any, and the coded
-/// slices that follow them in length-prefixed form.
 fn split_annex_b(stream: &[u8]) -> (Option<ParameterSets>, Vec<u8>) {
     let mut sps = None;
     let mut pps = None;
@@ -462,6 +478,63 @@ mod tests {
             Some(ExportError::InvalidSize { .. })
         ));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn frame_starts_follow_the_exact_rate_without_drifting() {
+        let rate = time::FrameRate::FPS_59_94;
+        assert_eq!(
+            frame_start(rate, 60_000, TIMESCALE),
+            1_001 * u64::from(TIMESCALE)
+        );
+        let durations: Vec<u64> = (0..4)
+            .map(|index| {
+                frame_start(rate, index + 1, TIMESCALE) - frame_start(rate, index, TIMESCALE)
+            })
+            .collect();
+        assert_eq!(durations, vec![1_502, 1_501, 1_502, 1_501]);
+        assert_eq!(
+            frame_start(time::FrameRate::FPS_30, 7, TIMESCALE),
+            7 * 3_000
+        );
+        assert_eq!(
+            frame_start(time::FrameRate::FPS_23_976, 24, TIMESCALE),
+            90_090
+        );
+    }
+
+    #[test]
+    fn ntsc_rates_get_a_timescale_with_a_constant_frame_duration() {
+        for (rate, timescale, duration) in [
+            (time::FrameRate::FPS_59_94, 180_000, 3_003),
+            (time::FrameRate::FPS_23_976, 360_000, 15_015),
+            (time::FrameRate::FPS_30, 90_000, 3_000),
+            (
+                time::FrameRate {
+                    numerator: 30_000,
+                    denominator: 1_001,
+                },
+                90_000,
+                3_003,
+            ),
+        ] {
+            assert_eq!(video_timescale(rate), timescale, "{rate:?}");
+            for index in [0, 1, 2, 999, 215_999] {
+                let span =
+                    frame_start(rate, index + 1, timescale) - frame_start(rate, index, timescale);
+                assert_eq!(span, duration, "{rate:?} frame {index}");
+            }
+            assert_eq!(timescale % TIMESCALE, 0);
+        }
+    }
+
+    #[test]
+    fn a_rate_needing_a_huge_timescale_keeps_ninety_kilohertz() {
+        let rate = time::FrameRate {
+            numerator: 90_001,
+            denominator: 1_000,
+        };
+        assert_eq!(video_timescale(rate), TIMESCALE);
     }
 
     #[test]

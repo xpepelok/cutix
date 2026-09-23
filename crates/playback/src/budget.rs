@@ -104,8 +104,6 @@ struct MemoryStatusEx {
 }
 
 #[cfg(windows)]
-// The signature is checked against the Win32 headers by hand; nothing verifies it
-// for us, which is what declaring the block unsafe acknowledges.
 unsafe extern "system" {
     fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
 }

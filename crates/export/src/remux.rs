@@ -178,6 +178,35 @@ struct Boundary {
     first: u32,
     last: u32,
     origin: u64,
+    end: u64,
+}
+
+fn starts_on_next_frame(
+    target: u64,
+    floor_start: u64,
+    floor_is_sync: bool,
+    next_start: Option<u64>,
+    frame_ticks: u64,
+) -> bool {
+    if floor_start > target {
+        return false;
+    }
+    let past_floor = target - floor_start;
+    let Some(to_next) = next_start
+        .filter(|next_start| *next_start > target)
+        .map(|next_start| next_start - target)
+    else {
+        return false;
+    };
+    if to_next >= past_floor {
+        return false;
+    }
+    let marginally_nearer = past_floor - to_next <= frame_ticks / 8;
+    !(floor_is_sync && past_floor <= frame_ticks / 2 && marginally_nearer)
+}
+
+fn keeps_last_frame(end: u64, start: u64, next: u64) -> bool {
+    end.saturating_sub(start) > next.saturating_sub(end)
 }
 
 fn sample_start(reader: &mut Mp4Reader<BufReader<File>>, track: u32, sample: u32) -> Option<u64> {
@@ -222,11 +251,6 @@ fn last_before(
     answer
 }
 
-/// The first sample whose presentation starts at or after `target`.
-///
-/// The counterpart of [`last_before`], for tracks whose samples cannot be cut into. A
-/// packet that straddles `target` begins before the material being kept, so it is skipped
-/// rather than copied with its timestamp pulled back to zero.
 fn first_at_or_after(
     reader: &mut Mp4Reader<BufReader<File>>,
     track: u32,
@@ -252,10 +276,6 @@ fn first_at_or_after(
     answer
 }
 
-/// Converts a time from one timescale to another, rounding to the nearest unit.
-///
-/// Video and audio tracks in the same file rarely share a timescale, so anchoring both to
-/// the same instant means converting between them rather than comparing raw numbers.
 fn rescale(time: u64, from: u32, to: u32) -> u64 {
     if from == 0 {
         return 0;
@@ -282,8 +302,26 @@ fn video_boundary(
     let start_target = ticks_to_timescale(plan.start, timescale);
     let end_target = ticks_to_timescale(plan.end(), timescale);
 
-    let first = last_at_or_before(reader, track, count, start_target)
+    let floor = last_at_or_before(reader, track, count, start_target)
         .ok_or_else(|| ExportError::Encoder("the trim starts past the last frame".to_owned()))?;
+    let floor_sample = reader
+        .read_sample(track, floor)
+        .map_err(|error| ExportError::Muxer(error.to_string()))?
+        .ok_or_else(|| ExportError::Encoder("the first trimmed frame is missing".to_owned()))?;
+    let next_start = (floor < count)
+        .then(|| sample_start(reader, track, floor + 1))
+        .flatten();
+    let first = if starts_on_next_frame(
+        start_target,
+        floor_sample.start_time,
+        floor_sample.is_sync,
+        next_start,
+        frame_ticks,
+    ) {
+        floor + 1
+    } else {
+        floor
+    };
     let sample = reader
         .read_sample(track, first)
         .map_err(|error| ExportError::Muxer(error.to_string()))?
@@ -322,16 +360,35 @@ fn video_boundary(
             ));
         }
     }
-    let _ = frame_ticks;
-
-    let last = last_before(reader, track, count, end_target)
-        .filter(|candidate| *candidate >= first)
-        .unwrap_or(first);
+    let last = match last_before(reader, track, count, end_target) {
+        Some(candidate) => {
+            let candidate_sample = reader
+                .read_sample(track, candidate)
+                .map_err(|error| ExportError::Muxer(error.to_string()))?
+                .ok_or_else(|| {
+                    ExportError::Encoder("the last trimmed frame is missing".to_owned())
+                })?;
+            let next = if candidate < count {
+                sample_start(reader, track, candidate + 1)
+            } else {
+                None
+            }
+            .unwrap_or(candidate_sample.start_time + u64::from(candidate_sample.duration));
+            if keeps_last_frame(end_target, candidate_sample.start_time, next) {
+                candidate
+            } else {
+                candidate.saturating_sub(1)
+            }
+        }
+        None => first,
+    }
+    .max(first);
 
     Ok(Boundary {
         first,
         last,
         origin: sample.start_time,
+        end: end_target,
     })
 }
 
@@ -547,24 +604,9 @@ pub fn run(
 
     let mut audio_samples = 0u64;
     if let Some((id, timescale, count, _)) = audio.as_ref() {
-        // The output's time zero is the video sample that was actually copied first, not
-        // the requested cut: snapping back to a keyframe moves it earlier. Anchoring audio
-        // to the requested cut instead would offset it against the video by exactly the
-        // snap distance.
         let origin = rescale(boundary.origin, video_timescale, *timescale);
-        let end_target = origin.saturating_add(rescale(
-            ticks_to_timescale(plan.duration, video_timescale),
-            video_timescale,
-            *timescale,
-        ));
+        let end_target = rescale(boundary.end, video_timescale, *timescale);
 
-        // An AAC packet cannot be cut into. The packet straddling the origin carries audio
-        // from before it, and copying it — then zeroing its timestamp, as a packet that
-        // starts early forces — plays that audio at the head of the result and shifts
-        // everything after it. Stream copy therefore starts at the first packet that
-        // begins at or after the origin. That trims up to one packet of audio, about 21 ms
-        // at 48 kHz, in exchange for exact sync; an export that must keep those samples has
-        // to decode and re-encode the edge, which is the non-copy path.
         let first = first_at_or_after(&mut reader, *id, *count, origin);
         let last = last_before(&mut reader, *id, *count, end_target);
         if let (Some(first), Some(last)) = (first, last) {
@@ -584,10 +626,6 @@ pub fn run(
                     .write_sample(
                         2,
                         &Mp4Sample {
-                            // Never negative: `first_at_or_after` guarantees the packet
-                            // starts at or after the origin, so this is the real gap
-                            // between time zero and where audio begins rather than a
-                            // clamped-away pre-roll.
                             start_time: sample.start_time.saturating_sub(origin),
                             duration,
                             rendering_offset: 0,
@@ -638,6 +676,50 @@ mod tests {
         for name in ["a.webm", "b.mkv", "c"] {
             assert!(!COPYABLE_CONTAINERS.contains(&extension_of(Path::new(name)).as_str()));
         }
+    }
+
+    #[test]
+    fn a_cut_between_frames_starts_on_the_nearest_one() {
+        assert!(!starts_on_next_frame(1_000, 0, false, Some(3_000), 3_000));
+        assert!(starts_on_next_frame(2_000, 0, false, Some(3_000), 3_000));
+        assert!(!starts_on_next_frame(1_500, 0, false, Some(3_000), 3_000));
+        assert!(!starts_on_next_frame(2_900, 0, false, None, 3_000));
+        assert!(!starts_on_next_frame(0, 100, false, Some(3_000), 3_000));
+    }
+
+    #[test]
+    fn a_cut_near_a_keyframe_stays_on_it_even_when_the_next_frame_is_nearer() {
+        assert!(!starts_on_next_frame(1_200, 0, true, Some(2_200), 3_000));
+        assert!(starts_on_next_frame(1_200, 0, false, Some(2_200), 3_000));
+        assert!(starts_on_next_frame(1_600, 0, true, Some(2_200), 3_000));
+    }
+
+    #[test]
+    fn a_keyframe_does_not_hold_a_cut_whose_next_frame_is_far_nearer() {
+        assert!(starts_on_next_frame(1_450, 0, true, Some(1_500), 3_000));
+        assert!(!starts_on_next_frame(1_450, 0, true, Some(2_700), 3_000));
+    }
+
+    #[test]
+    fn a_short_last_frame_of_a_whole_clip_copy_is_kept() {
+        assert!(keeps_last_frame(88_000, 87_000, 88_000));
+    }
+
+    #[test]
+    fn back_to_back_cuts_share_every_frame_out_exactly_once() {
+        let frame = 3_003u64;
+        for past in [0, 1, 1_000, 1_501, 1_502, 1_503, 2_000, 3_002] {
+            let end = frame + past;
+            let kept_by_first_cut = keeps_last_frame(end, frame, 2 * frame);
+            let starts_second_cut =
+                !starts_on_next_frame(end, frame, false, Some(2 * frame), frame);
+            assert!(
+                kept_by_first_cut != starts_second_cut,
+                "{past} ticks in: kept {kept_by_first_cut}, starts the next cut {starts_second_cut}"
+            );
+        }
+        assert!(!keeps_last_frame(1_500, 0, 3_000));
+        assert!(!starts_on_next_frame(1_500, 0, false, Some(3_000), 3_000));
     }
 
     #[test]

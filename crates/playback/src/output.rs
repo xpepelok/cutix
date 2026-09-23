@@ -53,9 +53,16 @@ impl Ring {
         (self.mask + 1) - self.occupancy()
     }
 
+    #[cfg(test)]
     fn push(&self, samples: &[f32]) -> usize {
+        self.push_frames(samples, 1)
+    }
+
+    fn push_frames(&self, samples: &[f32], channels: usize) -> usize {
+        let channels = channels.max(1);
         let mut written = self.written.load(Ordering::Relaxed);
-        let taken = samples.len().min(self.free());
+        let fitting = samples.len().min(self.free());
+        let taken = fitting - fitting % channels;
         for sample in &samples[..taken] {
             self.slots[written & self.mask].store(sample.to_bits(), Ordering::Relaxed);
             written = written.wrapping_add(1);
@@ -222,11 +229,11 @@ impl AudioOutput {
     }
 
     pub fn queue(&self, buffer: &AudioBuffer) {
-        self.ring.push(&buffer.interleaved);
+        self.ring.push_frames(&buffer.interleaved, self.channels);
     }
 
     pub fn queue_samples(&self, samples: &[f32]) {
-        self.ring.push(samples);
+        self.ring.push_frames(samples, self.channels);
     }
 
     pub fn queued_samples(&self) -> usize {
@@ -297,6 +304,15 @@ impl AudioOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_full_ring_accepts_only_whole_frames() {
+        let ring = Ring::new(8);
+        assert_eq!(ring.push_frames(&[0.0; 5], 1), 5);
+        assert_eq!(ring.push_frames(&[1.0, 2.0, 3.0, 4.0], 2), 2);
+        assert_eq!(ring.len(), 7);
+        assert_eq!(ring.push_frames(&[5.0, 6.0], 2), 0);
+    }
 
     #[test]
     fn a_ring_hands_back_what_was_put_in_it_in_order() {

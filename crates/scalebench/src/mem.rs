@@ -15,8 +15,6 @@ struct ProcessMemoryCounters {
 }
 
 #[cfg(windows)]
-// The signatures are checked against the Win32 headers by hand; nothing verifies them
-// for us, which is what declaring the block unsafe acknowledges.
 unsafe extern "system" {
     fn GetCurrentProcess() -> isize;
     fn K32GetProcessMemoryInfo(

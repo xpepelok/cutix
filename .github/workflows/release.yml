@@ -57,6 +57,10 @@ jobs:
 
       - run: cargo build -p cutix --release --locked
 
+      - name: Bundle FFmpeg
+        shell: bash
+        run: bash scripts/bundle-ffmpeg.sh windows dist/ffmpeg
+
       - name: Package
         shell: pwsh
         run: |
@@ -106,6 +110,10 @@ jobs:
           echo "ORT_DYLIB_PATH=$PWD/onnxruntime-linux-x64-1.20.1/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
       - run: cargo build -p cutix --release --locked
+
+      - name: Bundle FFmpeg
+        shell: bash
+        run: bash scripts/bundle-ffmpeg.sh linux dist/ffmpeg
 
       - name: Package
         run: |
@@ -170,6 +178,10 @@ jobs:
 
       - run: cargo build -p cutix --release --locked
 
+      - name: Bundle FFmpeg
+        shell: bash
+        run: bash scripts/bundle-ffmpeg.sh windows-arm64 dist/ffmpeg
+
       - name: Package
         shell: pwsh
         run: |
@@ -220,6 +232,10 @@ jobs:
           echo "ORT_DYLIB_PATH=$PWD/onnxruntime-linux-aarch64-1.20.1/lib/libonnxruntime.so" >> "$GITHUB_ENV"
 
       - run: cargo build -p cutix --release --locked
+
+      - name: Bundle FFmpeg
+        shell: bash
+        run: bash scripts/bundle-ffmpeg.sh linux-arm64 dist/ffmpeg
 
       - name: Package
         run: |

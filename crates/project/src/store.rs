@@ -236,7 +236,6 @@ impl ProjectStore {
         } else {
             project
         };
-        let _ = crate::mattes::sweep_orphans(document, &mattes);
         let bytes = serde_json::to_vec(document).map_err(|error| ProjectError::Json {
             path: self.project_file(&project.metadata.id),
             detail: error.to_string(),
@@ -244,6 +243,25 @@ impl ProjectStore {
         write_atomic(&self.project_file(&project.metadata.id), &bytes)?;
         self.write_sidecar(&project.metadata.id, &document.summary());
         Ok(())
+    }
+
+    pub fn saved_matte_files(&self, project: &Project) -> Result<Vec<String>> {
+        if has_inline_mattes(project) {
+            let mut copy = project.clone();
+            crate::mattes::externalize(&mut copy, &self.matte_directory(&project.metadata.id))?;
+            return Ok(crate::mattes::referenced_files(&copy));
+        }
+        Ok(crate::mattes::referenced_files(project))
+    }
+
+    pub fn sweep_mattes(&self, project: &Project) -> Result<usize> {
+        let mattes = self.matte_directory(&project.metadata.id);
+        if has_inline_mattes(project) {
+            let mut copy = project.clone();
+            crate::mattes::externalize(&mut copy, &mattes)?;
+            return crate::mattes::sweep_orphans(&copy, &mattes);
+        }
+        crate::mattes::sweep_orphans(project, &mattes)
     }
 
     pub fn create(&self, name: impl Into<String>) -> Result<Project> {
