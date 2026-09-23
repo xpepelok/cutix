@@ -67,6 +67,7 @@ fn local_offset_at(unix: i64) -> i64 {
 }
 
 #[cfg(unix)]
+#[allow(clippy::useless_conversion)]
 fn local_offset_at(unix: i64) -> i64 {
     let time = unix as libc::time_t;
     unsafe {

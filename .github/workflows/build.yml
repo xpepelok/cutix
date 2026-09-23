@@ -153,7 +153,7 @@ jobs:
         run: cargo build -p cutix --release --locked
 
       - name: Unit and integration tests
-        run: cargo test --workspace --locked -- --test-threads=1
+        run: cargo test --workspace --locked --no-fail-fast -- --test-threads=1
 
   features:
     name: feature matrix
