@@ -721,7 +721,15 @@ fn swap_in(staged: &Path, dir: &Path, files: &[PathBuf]) -> Result<Vec<PathBuf>,
 }
 
 struct InstallLock {
-    _file: fs::File,
+    file: Option<fs::File>,
+    path: PathBuf,
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn lock_path(work: &Path) -> PathBuf {
@@ -741,7 +749,10 @@ fn lock_install(work: &Path) -> Result<InstallLock, UpdateError> {
     file.write_all(std::process::id().to_string().as_bytes())
         .map_err(|_| UpdateError::Install)?;
     file.flush().map_err(|_| UpdateError::Install)?;
-    Ok(InstallLock { _file: file })
+    Ok(InstallLock {
+        file: Some(file),
+        path,
+    })
 }
 
 fn install_locked(work: &Path) -> bool {
