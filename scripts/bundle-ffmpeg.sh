@@ -4,23 +4,28 @@
 #
 #   scripts/bundle-ffmpeg.sh <platform> <destination>
 #
-# <platform> is "windows" or "linux". The destination ends up holding the five
+# <platform> is "windows", "windows-arm64", "linux" or "linux-arm64". The destination ends up holding the five
 # shared libraries the loader opens, the FFmpeg licence text, and PROVENANCE.txt
 # recording exactly which build this is.
 set -euo pipefail
 
-PLATFORM="${1:?usage: bundle-ffmpeg.sh <windows|linux> <destination>}"
-DESTINATION="${2:?usage: bundle-ffmpeg.sh <windows|linux> <destination>}"
+USAGE="usage: bundle-ffmpeg.sh <windows|windows-arm64|linux|linux-arm64> <destination>"
+PLATFORM="${1:?$USAGE}"
+DESTINATION="${2:?$USAGE}"
 
-# Pinned so a release is reproducible and so the licence text we ship matches the
-# binaries we ship. Bump both the tag and the checksum together.
+# The stable 8.1 branch rather than master: master builds of the NVENC wrapper
+# demand a driver newer than most machines have, and a release branch keeps the
+# library majors fixed between releases so a bundled copy stays replaceable.
 RELEASE_TAG="latest"
+BRANCH="n8.1"
 BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/${RELEASE_TAG}"
 
 case "$PLATFORM" in
-  windows) ARCHIVE="ffmpeg-master-latest-win64-lgpl-shared.zip" ;;
-  linux)   ARCHIVE="ffmpeg-master-latest-linux64-lgpl-shared.tar.xz" ;;
-  *) echo "unknown platform '$PLATFORM' (expected windows or linux)" >&2; exit 2 ;;
+  windows)       ARCHIVE="ffmpeg-${BRANCH}-latest-win64-lgpl-shared-${BRANCH#n}.zip" ;;
+  windows-arm64) ARCHIVE="ffmpeg-${BRANCH}-latest-winarm64-lgpl-shared-${BRANCH#n}.zip" ;;
+  linux)         ARCHIVE="ffmpeg-${BRANCH}-latest-linux64-lgpl-shared-${BRANCH#n}.tar.xz" ;;
+  linux-arm64)   ARCHIVE="ffmpeg-${BRANCH}-latest-linuxarm64-lgpl-shared-${BRANCH#n}.tar.xz" ;;
+  *) echo "unknown platform '$PLATFORM'; $USAGE" >&2; exit 2 ;;
 esac
 
 WORK="$(mktemp -d)"
@@ -129,9 +134,9 @@ Nothing here is fused into the Cutix executable, so you may replace it:
 
   * Replace the files in this directory with your own build of the same major
     versions, keeping the same file names, or
-  * set OPENCUT_FFMPEG_DIR to a directory holding your libraries, which takes
+  * set CUTIX_FFMPEG_DIR to a directory holding your libraries, which takes
     precedence over this one, or
-  * set OPENCUT_DISABLE_FFMPEG=1 to run without FFmpeg at all.
+  * set CUTIX_DISABLE_FFMPEG=1 to run without FFmpeg at all.
 
 Requirements for a substitute: shared libraries for avutil, swresample, swscale,
 avcodec and avformat, with libavcodec major 58 or newer.
